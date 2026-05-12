@@ -749,11 +749,11 @@ class PlexClient:
             seen_ids.add(mid)
             result.append(PlexClientInfo(
                 client_id=mid,
-                name=client.title,
-                product=client.product,
-                platform=client.platform,
+                name=client.title or "unknown",
+                product=client.product or "unknown",
+                platform=client.platform or "unknown",
                 is_playing=is_playing,
-                is_mobile=self._is_mobile_client(client.product, client.platform),
+                is_mobile=self._is_mobile_client(client.product or "unknown", client.platform or "unknown"),
             ))
 
         local_count = len(result)
