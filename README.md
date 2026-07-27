@@ -216,9 +216,10 @@ Community Apps, install it through **Docker → Add Container**:
 3. App data: `/mnt/user/appdata/mediasage` → `/app/data`
 4. Open the WebUI and complete the setup wizard
 
-The appdata directory must be writable by UID/GID `1000:1000`, used by the
-non-root user in the image. Avoid adding blank optional environment variables:
-environment values override settings saved through the setup wizard.
+The template runs the container as Unraid's standard `nobody:users` account
+(`99:100`) so Docker-created appdata is writable. Avoid adding blank optional
+environment variables: environment values override settings saved through the
+setup wizard.
 
 Maintainers can publish the template by submitting this repository through the
 [Unraid Community Apps portal](https://ca.unraid.net/submit). The portal still

@@ -22,8 +22,8 @@ Supports Anthropic, OpenAI, Gemini, experimental Ollama, and custom OpenAI-compa
   <WebUI>http://[IP]:[PORT:5765]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/unraid/mediasage.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/unraid/mediasage-icon.png</Icon>
-  <ExtraParams>--restart=unless-stopped</ExtraParams>
-  <Requires>The appdata directory must be writable by container UID/GID 1000:1000. MediaSage has no built-in authentication and should not be exposed directly to the public internet.</Requires>
+  <ExtraParams>--user=99:100 --restart=unless-stopped</ExtraParams>
+  <Requires>MediaSage has no built-in authentication and should not be exposed directly to the public internet.</Requires>
 
   <Config
     Name="WebUI Port"
@@ -41,7 +41,7 @@ Supports Anthropic, OpenAI, Gemini, experimental Ollama, and custom OpenAI-compa
     Target="/app/data"
     Default="/mnt/user/appdata/mediasage"
     Mode="rw"
-    Description="Persistent storage for the library cache and settings saved by the setup wizard. The directory must be writable by UID/GID 1000:1000."
+    Description="Persistent storage for the library cache and settings saved by the setup wizard. The container runs as Unraid's standard nobody:users account (99:100) so the default appdata directory is writable."
     Type="Path"
     Display="always"
     Required="true"

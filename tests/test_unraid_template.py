@@ -39,6 +39,12 @@ def test_unraid_template_has_required_metadata() -> None:
     assert root.findtext("WebUI") == "http://[IP]:[PORT:5765]/"
 
 
+def test_unraid_template_runs_as_unraid_appdata_owner() -> None:
+    root = ET.parse(TEMPLATE).getroot()
+
+    assert "--user=99:100" in (root.findtext("ExtraParams") or "")
+
+
 def test_unraid_template_only_forces_runtime_essentials() -> None:
     root = ET.parse(TEMPLATE).getroot()
     configs = root.findall("Config")
