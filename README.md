@@ -207,10 +207,22 @@ Then in **Container Manager** → **Project** → **Create**, point to `/volume1
 <details>
 <summary><strong>Unraid</strong></summary>
 
-1. **Docker** → **Add Container**
-2. Repository: `ghcr.io/ecwilsonaz/mediasage:latest`
-3. Port: 5765 → 5765
-4. Add variables: `PLEX_URL`, `PLEX_TOKEN`, `GEMINI_API_KEY`
+A submission-ready Community Apps template is included at
+[`unraid/mediasage.xml`](unraid/mediasage.xml). Until MediaSage is listed in
+Community Apps, install it through **Docker → Add Container**:
+
+1. Repository: `ghcr.io/ecwilsonaz/mediasage:latest`
+2. Port: 5765 → 5765
+3. App data: `/mnt/user/appdata/mediasage` → `/app/data`
+4. Open the WebUI and complete the setup wizard
+
+The appdata directory must be writable by UID/GID `1000:1000`, used by the
+non-root user in the image. Avoid adding blank optional environment variables:
+environment values override settings saved through the setup wizard.
+
+Maintainers can publish the template by submitting this repository through the
+[Unraid Community Apps portal](https://ca.unraid.net/submit). The portal still
+requires repository-owner review even when the XML is already present.
 
 </details>
 

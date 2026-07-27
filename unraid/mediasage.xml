@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Container version="2">
+  <Name>MediaSage</Name>
+  <Repository>ghcr.io/ecwilsonaz/mediasage:latest</Repository>
+  <Registry>https://github.com/ecwilsonaz/mediasage/pkgs/container/mediasage</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ecwilsonaz/mediasage/issues</Support>
+  <Project>https://github.com/ecwilsonaz/mediasage</Project>
+  <Overview>[b]MediaSage[/b] creates AI-powered Plex music playlists and album recommendations using only tracks you actually own.[br][br]
+[b]Setup:[/b][br]
+1. Install the container and open the WebUI.[br]
+2. Complete the first-run wizard to connect Plex and select an LLM provider.[br]
+3. Sync the music library, then create playlists or request album recommendations.[br][br]
+Supports Anthropic, OpenAI, Gemini, experimental Ollama, and custom OpenAI-compatible providers. Configuration entered in the WebUI persists under /app/data.[br][br]
+[b]Security:[/b] MediaSage has no built-in authentication. Keep it on a trusted LAN/VPN or place it behind an authenticated reverse proxy.</Overview>
+  <Description>Library-aware AI playlist generation and album recommendations for Plex music. Every playlist track is selected from the user's own library.</Description>
+  <Beta>False</Beta>
+  <Category>MediaApp:Music Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:5765]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/unraid/mediasage.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/unraid/mediasage-icon.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <Requires>The appdata directory must be writable by container UID/GID 1000:1000. MediaSage has no built-in authentication and should not be exposed directly to the public internet.</Requires>
+
+  <Config
+    Name="WebUI Port"
+    Target="5765"
+    Default="5765"
+    Mode="tcp"
+    Description="Port for the MediaSage web interface."
+    Type="Port"
+    Display="always"
+    Required="true"
+    Mask="false">5765</Config>
+
+  <Config
+    Name="App Data"
+    Target="/app/data"
+    Default="/mnt/user/appdata/mediasage"
+    Mode="rw"
+    Description="Persistent storage for the library cache and settings saved by the setup wizard. The directory must be writable by UID/GID 1000:1000."
+    Type="Path"
+    Display="always"
+    Required="true"
+    Mask="false">/mnt/user/appdata/mediasage</Config>
+</Container>
