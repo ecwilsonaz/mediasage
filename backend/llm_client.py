@@ -29,6 +29,8 @@ MODEL_COSTS = {
     # Google Gemini models
     "gemini-2.5-pro": {"input": 1.25, "output": 5.00},
     "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
+    "gemini-3.5-flash": {"input": 1.50, "output": 9.00},  # list prices, Sep 2026
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50},
 }
 
 # Context limits per model (in tokens) - used to calculate max tracks
@@ -42,6 +44,8 @@ MODEL_CONTEXT_LIMITS = {
     # Google Gemini
     "gemini-2.5-pro": 1_000_000,
     "gemini-2.5-flash": 1_000_000,
+    "gemini-3.5-flash": 1_000_000,
+    "gemini-3.5-flash-lite": 1_000_000,
 }
 
 # Tokens per track (based on real-world testing, Feb 2026)

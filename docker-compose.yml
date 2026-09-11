@@ -29,8 +29,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
 
       # Optional: Override default models
-      #- LLM_MODEL_ANALYSIS=gemini-2.5-flash
-      #- LLM_MODEL_GENERATION=gemini-2.5-flash
+      #- LLM_MODEL_ANALYSIS=gemini-3.5-flash
+      #- LLM_MODEL_GENERATION=gemini-3.5-flash-lite
 
       # Local LLM: Ollama (experimental)
       #- LLM_PROVIDER=ollama

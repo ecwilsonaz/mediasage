@@ -51,8 +51,9 @@ MODEL_DEFAULTS = {
         "generation": "gpt-4.1-mini",
     },
     "gemini": {
-        "analysis": "gemini-2.5-flash",
-        "generation": "gemini-2.5-flash",
+        # gemini-2.5-flash returns 404 for new API keys ("no longer available to new users")
+        "analysis": "gemini-3.5-flash",
+        "generation": "gemini-3.5-flash-lite",
     },
     "ollama": {
         "analysis": "",  # Populated from Ollama API

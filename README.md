@@ -339,8 +339,8 @@ plex:
 
 llm:
   provider: "gemini"
-  model_analysis: "gemini-2.5-flash"
-  model_generation: "gemini-2.5-flash"
+  model_analysis: "gemini-3.5-flash"
+  model_generation: "gemini-3.5-flash-lite"
   smart_generation: false  # true = use smarter model for both (higher quality, ~3-5x cost)
 
 defaults:
@@ -353,8 +353,8 @@ MediaSage uses a two-model strategy by default:
 
 | Role | Purpose | Models Used |
 |------|---------|-------------|
-| **Analysis** | Interpret prompts, suggest filters, analyze seed tracks | claude-sonnet-4-5 / gpt-4.1 / gemini-2.5-flash |
-| **Generation** | Select tracks from filtered list | claude-haiku-4-5 / gpt-4.1-mini / gemini-2.5-flash |
+| **Analysis** | Interpret prompts, suggest filters, analyze seed tracks | claude-sonnet-4-5 / gpt-4.1 / gemini-3.5-flash |
+| **Generation** | Select tracks from filtered list | claude-haiku-4-5 / gpt-4.1-mini / gemini-3.5-flash-lite |
 
 This balances quality with cost. Enable `smart_generation: true` to use the analysis model for everything.
 

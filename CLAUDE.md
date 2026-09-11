@@ -102,8 +102,8 @@ CUSTOM_CONTEXT_WINDOW=4096
 
 | Task | Anthropic | OpenAI | Gemini |
 |------|-----------|--------|--------|
-| Analysis | `claude-sonnet-4-5` | `gpt-4.1` | `gemini-2.5-flash` |
-| Generation | `claude-haiku-4-5` | `gpt-4.1-mini` | `gemini-2.5-flash` |
+| Analysis | `claude-sonnet-4-5` | `gpt-4.1` | `gemini-3.5-flash` |
+| Generation | `claude-haiku-4-5` | `gpt-4.1-mini` | `gemini-3.5-flash-lite` |
 | Context Limit | 200K tokens | 128K tokens | **1M tokens** |
 
 Gemini's 1M context allows sending ~18,000 tracks to the AI, vs ~3,500 for Anthropic/OpenAI.

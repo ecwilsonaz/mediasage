@@ -23,14 +23,28 @@ MediaSage auto-detects Gemini when this key is set.
 
 ## Free Tier Limits
 
-| Model | Requests/Min | Requests/Day | Free? |
-|-------|-------------|--------------|-------|
-| **Gemini 2.5 Flash** | ~10–15 | ~100–500 | Yes |
-| Gemini 2.5 Pro | ~5 | ~25–50 | Yes |
+Free-tier limits are set per model and change over time, so check the current numbers on Google's [rate limits page](https://ai.google.dev/gemini-api/docs/rate-limits). Limits reset at midnight PT.
 
-MediaSage uses **Gemini 2.5 Flash** by default — fast, handles large track lists, and has the most generous free limits. Even at 100 requests/day, that's 100 playlists. Limits reset at midnight PT.
+MediaSage uses two Gemini models by default:
 
-All Gemini models support a 1M token context window. Gemini can handle up to ~18,000 tracks per request — far more than other providers.
+| Role | Default model | Requests per playlist |
+|------|---------------|-----------------------|
+| Analysis: understand the prompt, write the playlist description | Gemini 3.5 Flash | 2 |
+| Generation: pick tracks from the filtered list (the large request) | Gemini 3.5 Flash-Lite | 1 |
+
+So playlists per day are capped by whichever runs out first: half the analysis model's daily limit, or the generation model's daily limit. Album recommendations make a few more requests.
+
+If one model's free quota is much tighter than the other's, point both roles at the same model, or swap them:
+
+```yaml
+services:
+  mediasage:
+    environment:
+      - LLM_MODEL_ANALYSIS=gemini-3.5-flash-lite
+      - LLM_MODEL_GENERATION=gemini-3.5-flash-lite
+```
+
+Current Gemini Flash models have a 1M token context window. Gemini can handle up to ~18,000 tracks per request — far more than other providers.
 
 ---
 
@@ -38,7 +52,7 @@ All Gemini models support a 1M token context window. Gemini can handle up to ~18
 
 On the free tier: **$0.00**.
 
-On the paid tier, a typical playlist costs $0.03–0.25 with Gemini 2.5 Flash.
+On the paid tier, a typical playlist costs roughly $0.03–0.25 with the default models; most of that is the Flash-Lite track-selection request.
 
 ---
 
@@ -66,8 +80,8 @@ On the paid tier, a typical playlist costs $0.03–0.25 with Gemini 2.5 Flash.
 |---|---|
 | Get your key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | Cost | Free (no credit card) |
-| Default model | Gemini 2.5 Flash |
-| Playlists/day (free) | ~100–500 |
+| Default models | Gemini 3.5 Flash (analysis), Gemini 3.5 Flash-Lite (generation) |
+| Playlists/day (free) | Depends on current per-model limits (see above) |
 | Context window | 1M tokens |
 | Data privacy (free) | Prompts may be used by Google |
 | Data privacy (paid) | Prompts not used by Google |

@@ -17,11 +17,11 @@ llm:
   # API key (override with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY env var)
   api_key: ""
   # Model for analysis (understanding prompts, extracting dimensions)
-  # Defaults: gemini-2.5-flash (Gemini), claude-sonnet-4-5-latest (Anthropic), gpt-4.1 (OpenAI)
-  # model_analysis: "gemini-2.5-flash"
+  # Defaults: gemini-3.5-flash (Gemini), claude-sonnet-4-5-latest (Anthropic), gpt-4.1 (OpenAI)
+  # model_analysis: "gemini-3.5-flash"
   # Model for generation (selecting tracks from list)
-  # Defaults: gemini-2.5-flash (Gemini), claude-haiku-4-5-latest (Anthropic), gpt-4.1-mini (OpenAI)
-  # model_generation: "gemini-2.5-flash"
+  # Defaults: gemini-3.5-flash-lite (Gemini), claude-haiku-4-5-latest (Anthropic), gpt-4.1-mini (OpenAI)
+  # model_generation: "gemini-3.5-flash-lite"
   # Use the analysis model for generation too (higher quality, ~3-5x cost)
   smart_generation: false
 
