@@ -278,8 +278,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     # Determine model names with proper fallback chain
     # When env var overrides to a DIFFERENT provider, use that provider's defaults
     # (prevents using custom provider's model names with gemini provider, etc.)
+    # A YAML file without a provider is not a switch: when LLM_PROVIDER locks the provider, the Settings UI
+    # never writes llm.provider, so the models saved there belong to the env provider.
     env_provider = os.environ.get("LLM_PROVIDER")
-    provider_changed_by_env = env_provider and env_provider != yaml_provider
+    provider_changed_by_env = bool(env_provider and yaml_provider and env_provider != yaml_provider)
 
     if provider_changed_by_env:
         # Env var switched to different provider - use new provider's defaults

@@ -542,8 +542,8 @@ async function fetchLibraryStatus() {
     return apiCall('/library/status');
 }
 
-async function triggerLibrarySync() {
-    return apiCall('/library/sync', { method: 'POST' });
+async function triggerLibrarySync({ force = false } = {}) {
+    return apiCall(`/library/sync${force ? '?force=true' : ''}`, { method: 'POST' });
 }
 
 // =============================================================================
@@ -2651,7 +2651,8 @@ async function handleRefreshLibrary() {
             return;
         }
 
-        await triggerLibrarySync();
+        // The user asked for it: accept the library even if it shrank a lot
+        await triggerLibrarySync({ force: true });
         startSyncPolling();
 
         // Update footer to show syncing

@@ -51,15 +51,6 @@ class BaseMediaClient(ABC):
         ...
 
     @abstractmethod
-    def get_all_albums_metadata(self) -> dict[str, dict[str, Any]]:
-        """Fetch all albums and return mapping of rating_key -> metadata.
-
-        Returns:
-            Dict mapping album rating_key (as string) to dict with 'genres' and 'year'
-        """
-        ...
-
-    @abstractmethod
     def get_tracks_by_filters(
         self,
         genres: list[str] | None = None,

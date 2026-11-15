@@ -602,6 +602,12 @@ class LibraryCacheStatusResponse(BaseModel):
     error: str | None = None
     plex_connected: bool
     needs_resync: bool = False
+    # For the retry loop and external health checks
+    sync_kind: str | None = None          # "full" or "incremental" (last attempt)
+    last_attempt_at: str | None = None    # last sync start in this process
+    error_at: str | None = None
+    incremental_at: str | None = None     # watermark: tracks changed after this are picked up next time
+    interrupted: bool = False             # a full sync was running when the process died (re-sync pending)
 
 
 class SyncTriggerResponse(BaseModel):

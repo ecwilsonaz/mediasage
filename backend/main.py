@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 import random
 import re
 import threading
@@ -138,23 +139,23 @@ async def lifespan(app: FastAPI):
     # Initialize DB schema early so migration flag is set
     library_cache.ensure_db_initialized().close()
 
-    # Re-sync after a schema migration, or when the cache holds another server's library
-    # (e.g. MEDIA_SERVER changed). sync_library clears a different server's tracks first.
+    # Re-sync after a schema migration, or when the cache holds another server's or music library's tracks
+    # (e.g. MEDIA_SERVER or PLEX_MUSIC_LIBRARY changed). sync_library clears those tracks first.
     media_client = get_current_media_client()
     if media_client and media_client.is_connected():
-        server_id = media_client.get_machine_identifier()
-        if library_cache.needs_resync() or (server_id and library_cache.check_server_changed(server_id)):
-            logger.info("Library cache is out of date — starting automatic re-sync")
+        if _cache_is_for_another_library(media_client):
+            logger.info("Library cache holds another library's tracks — starting automatic re-sync")
             asyncio.create_task(asyncio.to_thread(library_cache.sync_library, media_client))
         else:
-            _sync_if_stale()
+            _sync_if_due()   # empty / interrupted / migrated / stale cache -> sync on boot
 
-    freshness_task = asyncio.create_task(_keep_library_fresh())
+    freshness_task = asyncio.create_task(_keep_library_fresh()) if LIBRARY_CHECK_INTERVAL > 0 else None
 
     yield
 
     # Shutdown: clean up resources
-    freshness_task.cancel()
+    if freshness_task:
+        freshness_task.cancel()
     if _music_research_client is not None:
         await _music_research_client.close()
     if _art_proxy_client is not None:
@@ -174,25 +175,87 @@ app = FastAPI(
 # =============================================================================
 
 
-LIBRARY_CHECK_INTERVAL = 3600  # seconds between staleness checks
+# The library keeps itself fresh without anyone poking it.
+# - every LIBRARY_CHECK_SECONDS: an empty, interrupted, migrated or stale (LIBRARY_SYNC_HOURS) cache gets a full
+#   sync; otherwise a cache older than LIBRARY_INCREMENTAL_MINUTES gets an incremental one (new/changed tracks,
+#   Plex only, 0 = off). Previously staleness was checked once an hour and the track count was never
+#   looked at, so an empty cache with a fresh timestamp sat there for LIBRARY_SYNC_HOURS.
+# - a failed attempt is retried after LIBRARY_RETRY_MINUTES, not on every check.
+# - LIBRARY_CHECK_SECONDS=0 turns the periodic check off (it still runs once at startup).
 
 
-def _sync_if_stale() -> None:
-    """Start a background sync once the cache is older than the auto-refresh setting (0 = off)."""
-    max_age_hours = get_config().library_sync_hours
-    if max_age_hours <= 0 or library_cache.get_sync_progress()["is_syncing"]:
+def _env_number(name: str, default: float) -> float:
+    """A non-negative number from the environment; anything else falls back to the default."""
+    raw = os.environ.get(name, "")
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        value = -1
+    if value < 0:
+        logger.warning("Ignoring %s=%r, using %g", name, raw, default)
+        return default
+    return value
+
+
+LIBRARY_CHECK_INTERVAL = _env_number("LIBRARY_CHECK_SECONDS", 300)
+LIBRARY_INCREMENTAL_MINUTES = _env_number("LIBRARY_INCREMENTAL_MINUTES", 60)
+LIBRARY_RETRY_MINUTES = _env_number("LIBRARY_RETRY_MINUTES", 30)
+
+
+def _cache_is_for_another_library(media_client) -> bool:
+    """True when the cache was synced from a different server, or a different music library on this one."""
+    server_id = media_client.get_machine_identifier()
+    library_id = library_cache.library_id_of(media_client)
+    return bool(server_id) and library_cache.check_server_changed(server_id, library_id)
+
+
+def _resync_if_library_changed() -> None:
+    """Replace the cache if the settings now point at another server or music library.
+
+    A client that did not connect (say, a mistyped library name) changes nothing.
+    """
+    media_client = get_current_media_client()
+    if media_client and media_client.is_connected() and _cache_is_for_another_library(media_client):
+        _resync_for_new_media_server()
+
+
+def _sync_if_due() -> None:
+    """Start the background sync the cache needs now, if any (see the notes above)."""
+    progress = library_cache.get_sync_progress()
+    if progress["is_syncing"]:
         return
     media_client = get_current_media_client()
-    if media_client and media_client.is_connected() and library_cache.is_cache_stale(max_age_hours):
-        logger.info("Library cache is more than %g hours old — syncing", max_age_hours)
-        asyncio.create_task(asyncio.to_thread(library_cache.sync_library, media_client))
+    if not media_client or not media_client.is_connected():
+        return
+    needed = library_cache.sync_needed()
+    # Back off after a failure, and after syncing a library that turned out to be empty
+    if (progress["error"] or needed == "empty") and progress["last_attempt_at"]:
+        last = datetime.fromisoformat(progress["last_attempt_at"])
+        if (datetime.now(timezone.utc) - last).total_seconds() < LIBRARY_RETRY_MINUTES * 60:
+            return
+    max_age_hours = get_config().library_sync_hours
+    if needed or library_cache.needs_resync():
+        logger.info("Library cache is %s — starting a full sync", needed or "from an older version")
+    elif max_age_hours > 0 and library_cache.is_cache_stale(max_age_hours):
+        logger.info("Library cache is more than %g hours old — starting a full sync", max_age_hours)
+    elif (
+        LIBRARY_INCREMENTAL_MINUTES > 0
+        and hasattr(media_client, "iter_raw_tracks")
+        and library_cache.incremental_due(LIBRARY_INCREMENTAL_MINUTES)
+    ):
+        logger.info("Library cache is more than %g minutes old — starting an incremental sync", LIBRARY_INCREMENTAL_MINUTES)
+        asyncio.create_task(asyncio.to_thread(library_cache.sync_library, media_client, None, True))
+        return
+    else:
+        return
+    asyncio.create_task(asyncio.to_thread(library_cache.sync_library, media_client))
 
 
 async def _keep_library_fresh() -> None:
     while True:
         await asyncio.sleep(LIBRARY_CHECK_INTERVAL)
         try:
-            _sync_if_stale()
+            _sync_if_due()
         except Exception:
             logger.exception("Library freshness check failed")
 
@@ -406,6 +469,8 @@ async def setup_validate_plex(request: ValidatePlexRequest) -> ValidatePlexRespo
     init_plex_client(request.plex_url, request.plex_token, request.music_library)
     if previous_server != "plex":
         _resync_for_new_media_server()
+    else:
+        _resync_if_library_changed()
 
     return ValidatePlexResponse(
         success=True,
@@ -449,6 +514,8 @@ async def setup_validate_jellyfin(request: ValidateJellyfinRequest) -> ValidateJ
     init_jellyfin_client(request.jellyfin_url, request.jellyfin_token, request.music_library)
     if previous_server != "jellyfin":
         _resync_for_new_media_server()
+    else:
+        _resync_if_library_changed()
 
     return ValidateJellyfinResponse(
         success=True,
@@ -604,7 +671,8 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
     # Reinitialize clients if relevant config changed
-    if any(k in updates for k in ["plex_url", "plex_token", "music_library"]):
+    plex_changed = any(k in updates for k in ["plex_url", "plex_token", "music_library"])
+    if plex_changed:
         init_plex_client(
             config.plex.url,
             config.plex.token,
@@ -625,6 +693,8 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
 
     if config.media_server != previous_server:
         _resync_for_new_media_server()
+    elif plex_changed or jellyfin_changed:
+        _resync_if_library_changed()
 
     return _build_config_response(config, get_current_media_client())
 
@@ -724,11 +794,19 @@ async def get_library_status() -> LibraryCacheStatusResponse:
         error=state["error"],
         plex_connected=media_client.is_connected() if media_client else False,
         needs_resync=library_cache.needs_resync(),
+        sync_kind=state["sync_kind"],
+        last_attempt_at=state["last_attempt_at"],
+        error_at=state["error_at"],
+        incremental_at=state["incremental_at"],
+        interrupted=state["interrupted"],
     )
 
 
 @app.post("/api/library/sync", response_model=SyncTriggerResponse)
-async def trigger_library_sync() -> SyncTriggerResponse:
+async def trigger_library_sync(
+    incremental: bool = Query(False, description="Only tracks added/changed since the last sync (Plex)"),
+    force: bool = Query(False, description="Accept a library less than half the size of the cache"),
+) -> SyncTriggerResponse:
     """Trigger library sync from the configured media server.
 
     Always starts sync in background so progress can be polled.
@@ -744,7 +822,7 @@ async def trigger_library_sync() -> SyncTriggerResponse:
 
     # Always run sync in background so progress can be polled
     asyncio.create_task(
-        asyncio.to_thread(library_cache.sync_library, media_client)
+        asyncio.to_thread(library_cache.sync_library, media_client, None, incremental, force)
     )
     return SyncTriggerResponse(started=True, blocking=False)
 

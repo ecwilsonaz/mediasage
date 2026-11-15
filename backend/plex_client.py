@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from plexapi.exceptions import NotFound, Unauthorized
@@ -197,7 +197,9 @@ class PlexClient(BaseMediaClient):
             return
 
         try:
-            self._server = PlexServer(self.url, self.token, timeout=30)
+            # 30 s is too short for one all-tracks request on large libraries (~380K tracks timed out and
+            # committed an empty cache). Configurable via PLEX_TIMEOUT (seconds), default 300.
+            self._server = PlexServer(self.url, self.token, timeout=int(os.environ.get("PLEX_TIMEOUT", "300")))
             self._library = self._server.library.section(self.music_library_name)
             self._error = None
         except Unauthorized:
@@ -249,6 +251,10 @@ class PlexClient(BaseMediaClient):
             return None
         return self._server.machineIdentifier
 
+    def get_library_identifier(self) -> str | None:
+        """Music library section UUID, used to detect a change of music library for the library cache."""
+        return getattr(self._library, "uuid", None) if self._library else None
+
     def get_error(self) -> str | None:
         """Get the last error message if any."""
         return self._error
@@ -279,62 +285,55 @@ class PlexClient(BaseMediaClient):
             logger.exception("Failed to get library track count: %s", e)
             return 0
 
-    def get_all_raw_tracks(self) -> list[Any]:
-        """Get all raw track objects from the library.
+    # Paged, filterable track listing + batched album/artist metadata for library_cache.sync_library.
+    # Reading track.genres / lastViewedAt / userRating as attributes on partial plexapi objects makes plexapi
+    # GET /library/metadata/<key> for every track whose value is None/[] (~440K requests per sync on a
+    # ~386K-track library, hours), and a track deleted between listing and processing was a 404 that aborted the
+    # whole sync. Read fields with vars() instead. Section listings also carry only the first two genre tags
+    # of an album or artist; fetch_metadata returns them all.
+    SYNC_PAGE_SIZE = int(os.environ.get("PLEX_SYNC_PAGE_SIZE", "5000"))
+    METADATA_BATCH = 500   # keys per /library/metadata/k1,k2,... request (1000 tested fine)
 
-        This fetches all tracks in a single API call. For large libraries
-        (30k+ tracks), this may take 30-60 seconds.
+    def iter_raw_tracks(self, updated_since: int | None = None) -> Iterator[list[Any]]:
+        """Yield the music library's tracks one page at a time (raw plexapi objects, read them with vars()).
 
-        Returns:
-            List of raw Plex track objects
+        updated_since: unix time; only tracks added or changed since then (incremental sync). Errors propagate -
+        a sync must fail rather than commit a partial listing.
         """
         if not self._library:
-            return []
+            raise RuntimeError(self._error or "Plex not connected")
+        key = f"/library/sections/{self._library.key}/all?type=10&sort=addedAt:asc"
+        if updated_since:
+            key += f"&updatedAt>>={int(updated_since)}"
+        start, size = 0, self.SYNC_PAGE_SIZE
+        while True:
+            page = self._library.fetchItems(key, container_start=start, container_size=size, maxresults=size)
+            if not page:
+                return
+            yield page
+            if len(page) < size:
+                return
+            start += size
 
-        try:
-            logger.info("Fetching all tracks from Plex (this may take a while)...")
-            return self._library.search(libtype="track")
-        except Exception as e:
-            logger.exception("Failed to get all tracks: %s", e)
-            return []
-
-    def get_all_albums_metadata(self) -> dict[str, dict[str, Any]]:
-        """Fetch all albums and return mapping of rating_key -> metadata.
-
-        Returns:
-            Dict mapping album rating_key (as string) to dict with 'genres' and 'year'
-        """
-        if not self._library:
-            return {}
-
-        try:
-            logger.info("Fetching all albums for metadata mapping...")
-            albums = self._library.search(libtype="album")
-            album_metadata = {
-                str(album.ratingKey): {
-                    "genres": [g.tag for g in album.genres],
-                    "year": getattr(album, "year", None),
+    def fetch_metadata(self, rating_keys: list[str]) -> dict[str, dict[str, Any]]:
+        """year + genres for albums/artists by rating key, batched (keys Plex no longer has are left out)."""
+        if not self._server:
+            raise RuntimeError(self._error or "Plex not connected")
+        out: dict[str, dict[str, Any]] = {}
+        keys = [k for k in rating_keys if k]
+        for i in range(0, len(keys), self.METADATA_BATCH):
+            chunk = keys[i : i + self.METADATA_BATCH]
+            try:
+                data = self._server.query("/library/metadata/" + ",".join(chunk))
+            except NotFound:
+                continue   # none of the chunk exists any more
+            for el in data:
+                year = el.attrib.get("year")
+                out[str(el.attrib.get("ratingKey"))] = {
+                    "year": int(year) if year and year.isdigit() else None,
+                    "genres": [g.attrib.get("tag") for g in el if g.tag == "Genre" and g.attrib.get("tag")],
                 }
-                for album in albums
-            }
-            logger.info("Got metadata for %d albums", len(album_metadata))
-            return album_metadata
-        except Exception as e:
-            logger.exception("Failed to get album metadata: %s", e)
-            return {}
-
-    def get_all_artist_genres(self) -> dict[str, list[str]]:
-        """Map each artist's rating key to its genres (where people usually curate their own)."""
-        if not self._library:
-            return {}
-        try:
-            return {
-                str(artist.ratingKey): [g.tag for g in artist.genres]
-                for artist in self._library.search(libtype="artist")
-            }
-        except Exception:
-            logger.exception("Failed to get artist genres")
-            return {}
+        return out
 
     def get_library_stats(self) -> dict[str, Any]:
         """Get statistics about the music library.

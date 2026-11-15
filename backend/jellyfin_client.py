@@ -225,19 +225,6 @@ class JellyfinClient(BaseMediaClient):
             })
         return rows
 
-    def get_all_albums_metadata(self) -> dict[str, dict[str, Any]]:
-        if not self._connected:
-            return {}
-        try:
-            params = self._library_params("MusicAlbum", Fields="Genres,ProductionYear")
-            return {
-                item["Id"]: {"genres": item.get("Genres", []), "year": item.get("ProductionYear")}
-                for item in self._iter_items(params)
-            }
-        except Exception:
-            logger.exception("Failed to get Jellyfin album metadata")
-            return {}
-
     def get_tracks_by_filters(
         self,
         genres: list[str] | None = None,
@@ -480,6 +467,10 @@ class JellyfinClient(BaseMediaClient):
     def get_machine_identifier(self) -> str | None:
         """Server ID, used to detect a server change for the library cache."""
         return self._system_info().get("Id")
+
+    def get_library_identifier(self) -> str | None:
+        """Music library ID, used to detect a change of music library for the library cache."""
+        return self._library_id
 
     def get_server_name(self) -> str | None:
         return self._system_info().get("ServerName")

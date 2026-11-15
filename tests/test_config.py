@@ -209,6 +209,24 @@ class TestLoadConfig:
         assert config.llm.provider == "openai"
         assert config.llm.api_key == ""
 
+    def test_ui_saved_models_kept_when_env_locks_provider(self, tmp_path, monkeypatch):
+        """Models saved in Settings survive a restart when LLM_PROVIDER is set and the YAML has no provider."""
+        for var in ["PLEX_URL", "PLEX_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                    "LLM_PROVIDER", "LLM_MODEL_ANALYSIS", "LLM_MODEL_GENERATION", "CUSTOM_LLM_MODEL"]:
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("LLM_PROVIDER", "custom")
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("")
+        user_config = {"llm": {"model_analysis": "my-model", "model_generation": "my-model"}}
+
+        with patch("backend.config.load_user_yaml_config", return_value=user_config):
+            config = load_config(config_file)
+
+        assert config.llm.provider == "custom"
+        assert config.llm.model_analysis == "my-model"
+        assert config.llm.model_generation == "my-model"
+
     def test_default_models_for_anthropic(self, tmp_path, monkeypatch):
         """Should use default Anthropic models when not specified."""
         for var in ["PLEX_URL", "PLEX_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
