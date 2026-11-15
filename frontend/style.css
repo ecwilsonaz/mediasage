@@ -3659,3 +3659,127 @@ body.no-scroll {
         padding: 0 var(--spacing-sm) var(--spacing-sm);
     }
 }
+
+
+/* Scheduled playlist refresh */
+.schedule-card {
+    text-align: left;
+}
+
+.schedule-card h2,
+.schedule-card .play-choice-description {
+    text-align: center;
+}
+
+.schedule-fields {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.schedule-fields .form-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.schedule-fields select {
+    width: 100%;
+}
+
+.schedule-note {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.schedule-cost {
+    border-left: 3px solid var(--warning);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: var(--spacing-sm) var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.schedule-cost--free {
+    border-left-color: var(--success);
+}
+
+.schedule-cost strong {
+    color: var(--text-primary);
+}
+
+.schedule-confirm {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.schedule-confirm.hidden {
+    display: none;
+}
+
+.schedules-summary {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.schedule-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) 0;
+    border-top: 1px solid var(--border);
+}
+
+.schedule-item-info {
+    min-width: 0;
+}
+
+.schedule-item-title {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.schedule-item-line {
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+}
+
+.schedule-item-line--error {
+    color: var(--error);
+}
+
+.schedule-item-line--paused {
+    color: var(--warning);
+}
+
+.schedule-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--spacing-sm);
+    flex-shrink: 0;
+}
+
+.schedule-item-actions .confirming {
+    background: var(--error);
+    color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+    .schedule-fields,
+    .schedule-item {
+        flex-direction: column;
+    }
+
+    .schedule-item-actions {
+        justify-content: flex-start;
+    }
+}

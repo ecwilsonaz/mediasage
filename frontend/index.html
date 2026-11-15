@@ -549,6 +549,7 @@
                         <div class="success-modal-actions">
                             <a id="open-in-plex-btn" class="btn btn-plex" href="#" target="_blank" rel="noopener">Open in Plex <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/></svg></a>
                             <button id="new-playlist-btn" class="btn btn-primary">Start New Playlist</button>
+                            <button id="schedule-after-save-btn" class="btn btn-secondary hidden">Schedule automatic refreshes</button>
                             <button class="btn btn-secondary" onclick="dismissSuccessModal()">Back to Playlist</button>
                         </div>
                     </div>
@@ -574,6 +575,7 @@
                         <div class="success-actions">
                             <a id="update-open-in-plex-btn" class="btn btn-plex" href="#" target="_blank" rel="noopener">Open in Plex <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/></svg></a>
                             <button id="update-new-playlist-btn" class="btn btn-primary">New Playlist</button>
+                            <button id="schedule-after-update-btn" class="btn btn-secondary hidden">Schedule automatic refreshes</button>
                         </div>
                     </div>
                 </div>
@@ -868,6 +870,12 @@
                     </button>
                 </div>
 
+                <section class="settings-section" id="schedules-section">
+                    <h3>Scheduled Playlists</h3>
+                    <p id="schedules-summary" class="schedules-summary"></p>
+                    <div id="schedules-list" class="schedules-list"></div>
+                </section>
+
                 <section class="settings-section library-stats" id="library-stats-section" style="display: none;">
                     <h3>Library Statistics</h3>
                     <div id="library-stats"></div>
@@ -923,6 +931,42 @@
                     <button id="play-next-btn" class="btn btn-secondary play-choice-btn">Play Next</button>
                 </div>
                 <button class="btn-link modal-cancel" onclick="dismissPlayChoice()">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Schedule Playlist Refresh Modal -->
+        <div id="schedule-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
+            <div class="modal-card schedule-card">
+                <button class="modal-close" onclick="dismissScheduleModal()" aria-label="Close">&times;</button>
+                <h2 id="schedule-modal-title">Schedule automatic refreshes</h2>
+                <p id="schedule-modal-description" class="play-choice-description"></p>
+                <div class="schedule-fields">
+                    <div class="form-group">
+                        <label for="schedule-frequency">How often</label>
+                        <select id="schedule-frequency">
+                            <option value="daily">Every day</option>
+                            <option value="weekly">Every week</option>
+                        </select>
+                    </div>
+                    <div class="form-group hidden" id="schedule-weekday-group">
+                        <label for="schedule-weekday">Day</label>
+                        <select id="schedule-weekday"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="schedule-hour">Time</label>
+                        <select id="schedule-hour"></select>
+                    </div>
+                </div>
+                <p id="schedule-timezone" class="schedule-note"></p>
+                <div id="schedule-cost" class="schedule-cost"></div>
+                <label id="schedule-confirm-label" class="schedule-confirm hidden">
+                    <input type="checkbox" id="schedule-confirm-cost">
+                    <span>I understand each refresh is charged to my AI provider account</span>
+                </label>
+                <div class="play-choice-buttons">
+                    <button id="schedule-save-btn" class="btn btn-primary play-choice-btn">Schedule</button>
+                </div>
+                <button class="btn-link modal-cancel" onclick="dismissScheduleModal()">Cancel</button>
             </div>
         </div>
 

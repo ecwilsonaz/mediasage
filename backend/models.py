@@ -2,6 +2,7 @@
 
 import re
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -881,6 +882,78 @@ class ResultDetail(BaseModel):
     subtitle: str | None = None
     created_at: str
     snapshot: dict
+    schedulable: bool = False  # Can be refreshed on a schedule
+
+
+# =============================================================================
+# Scheduled Playlist Refresh Models
+# =============================================================================
+
+
+def _check_timezone(v: str | None) -> str | None:
+    try:
+        if v is not None:
+            ZoneInfo(v)
+    except Exception:
+        raise ValueError(f"Unknown timezone: {v}")
+    return v
+
+
+class ScheduleCreateRequest(BaseModel):
+    """Refresh a saved playlist on a schedule, with the generation parameters of a past result."""
+
+    result_id: str
+    playlist_id: str
+    frequency: Literal["daily", "weekly"]
+    hour: int = Field(ge=0, le=23)  # Local to `timezone`
+    weekday: int = Field(0, ge=0, le=6)  # 0 = Monday; weekly only
+    timezone: str = "UTC"  # IANA name, e.g. "America/Denver"
+    confirm_cost: bool = False  # Required when the AI provider charges per run
+
+    _check_timezone = field_validator("timezone")(_check_timezone)
+
+
+class ScheduleUpdateRequest(BaseModel):
+    """Pause, resume or retime a schedule. Omitted fields stay as they are."""
+
+    enabled: bool | None = None
+    frequency: Literal["daily", "weekly"] | None = None
+    hour: int | None = Field(None, ge=0, le=23)
+    weekday: int | None = Field(None, ge=0, le=6)
+    timezone: str | None = None
+
+    _check_timezone = field_validator("timezone")(_check_timezone)
+
+
+class ScheduleInfo(BaseModel):
+    """A scheduled playlist refresh and how its last run went."""
+
+    id: str
+    playlist_id: str
+    playlist_title: str
+    prompt: str
+    frequency: str
+    hour: int
+    weekday: int
+    timezone: str
+    enabled: bool
+    paused_reason: str | None = None
+    is_running: bool = False
+    next_run_at: str
+    last_run_at: str | None = None
+    last_status: str | None = None  # 'ok' | 'error' | 'skipped'
+    last_error: str | None = None
+    last_track_count: int | None = None
+    failures: int = 0
+    total_cost: float = 0
+    cost_per_run: float = 0  # The last run's, or the original generation's before the first run
+    cost_per_month: float = 0
+
+
+class ScheduleListResponse(BaseModel):
+    schedules: list[ScheduleInfo]
+    paid_provider: bool  # False for local providers, which cost nothing per run
+    cost_per_month: float  # Enabled schedules only
 
 
 # =============================================================================
