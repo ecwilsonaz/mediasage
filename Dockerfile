@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code with ownership
 COPY --chown=mediasageappuser:mediasageappuser backend/ ./backend/
 COPY --chown=mediasageappuser:mediasageappuser frontend/ ./frontend/
+COPY --chown=mediasageappuser:mediasageappuser model_catalog.yaml ./
 
 # Expose port
 EXPOSE 5765

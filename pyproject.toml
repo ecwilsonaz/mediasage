@@ -1,0 +1,3 @@
+[tool.ruff.lint]
+# Ruff's classic defaults: syntax errors, undefined names, unused imports/variables
+select = ["E4", "E7", "E9", "F"]

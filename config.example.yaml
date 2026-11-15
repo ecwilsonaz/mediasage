@@ -2,6 +2,11 @@
 # Copy this file to config.yaml and update with your settings
 # Environment variables take priority over values in this file
 
+# Media server selection: "plex" or "jellyfin"
+# Override with MEDIA_SERVER env var
+# Auto-detected: if JELLYFIN_URL is set and PLEX_URL is not, defaults to "jellyfin"
+media_server: "plex"
+
 plex:
   # Plex server URL (override with PLEX_URL env var)
   url: "http://your-plex-server:32400"
@@ -11,17 +16,26 @@ plex:
   # Name of your music library section in Plex
   music_library: "Music"
 
+jellyfin:
+  # Jellyfin server URL (override with JELLYFIN_URL env var)
+  url: ""
+  # Jellyfin API key — create one in Jellyfin: Dashboard > API Keys
+  # Override with JELLYFIN_TOKEN env var
+  token: ""
+  # Name of your music library in Jellyfin
+  music_library: "Music"
+
 llm:
-  # LLM provider: "anthropic", "openai", or "gemini"
+  # LLM provider: "anthropic", "openai", "gemini", "ollama", or "custom"
   provider: "gemini"
   # API key (override with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY env var)
   api_key: ""
   # Model for analysis (understanding prompts, extracting dimensions)
-  # Defaults: gemini-2.5-flash (Gemini), claude-sonnet-4-5-latest (Anthropic), gpt-4.1 (OpenAI)
-  # model_analysis: "gemini-2.5-flash"
+  # Defaults: gemini-3.5-flash-lite (Gemini), claude-sonnet-5-5 (Anthropic), gpt-6.1-sol (OpenAI)
+  # model_analysis: "gemini-3.5-flash-lite"
   # Model for generation (selecting tracks from list)
-  # Defaults: gemini-2.5-flash (Gemini), claude-haiku-4-5-latest (Anthropic), gpt-4.1-mini (OpenAI)
-  # model_generation: "gemini-2.5-flash"
+  # Defaults: gemini-3.5-flash-lite (Gemini), claude-haiku-4-5 (Anthropic), gpt-6-luna (OpenAI)
+  # model_generation: "gemini-3.5-flash-lite"
   # Use the analysis model for generation too (higher quality, ~3-5x cost)
   smart_generation: false
 

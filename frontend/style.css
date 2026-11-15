@@ -682,6 +682,22 @@ textarea {
     opacity: 0.8;
 }
 
+/* Artist filter */
+.artist-filter-label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.artist-chips {
+    margin-top: var(--spacing-sm);
+}
+
+.artist-chips:empty {
+    margin: 0 0 var(--spacing-md);
+}
+
 /* Track Count Selector */
 .track-count-selector {
     display: flex;
@@ -717,8 +733,7 @@ textarea {
     flex-wrap: wrap;
 }
 
-.limit-btn,
-.rating-btn {
+.limit-btn {
     padding: var(--spacing-xs) var(--spacing-sm);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
@@ -729,13 +744,11 @@ textarea {
     transition: all var(--transition-fast);
 }
 
-.limit-btn:hover,
-.rating-btn:hover {
+.limit-btn:hover {
     background: var(--bg-hover);
 }
 
-.limit-btn.active,
-.rating-btn.active {
+.limit-btn.active {
     border-color: var(--accent);
     color: var(--accent);
 }
@@ -754,10 +767,9 @@ textarea {
 }
 
 /* Rating Selector */
-.rating-selector {
-    display: flex;
-    gap: var(--spacing-sm);
-    flex-wrap: wrap;
+.rating-select {
+    width: auto;
+    min-width: 12rem;
 }
 
 /* Filter Preview */
@@ -2378,8 +2390,7 @@ body.no-scroll {
     }
 
     .count-btn,
-    .limit-btn,
-    .rating-btn {
+    .limit-btn {
         min-height: 44px;
     }
 

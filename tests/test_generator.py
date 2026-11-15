@@ -3,6 +3,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def _parse_sse_events(generator):
     """Parse SSE events from generate_playlist_stream into (event, data) tuples."""
@@ -49,7 +51,7 @@ class TestPlaylistGeneration:
             ]
             mock_llm.return_value = mock_client
 
-            with patch("backend.generator.get_plex_client") as mock_plex:
+            with patch("backend.generator.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_tracks_by_filters.return_value = mock_plex_tracks[:5]
                 mock_plex.return_value = mock_plex_client
@@ -81,7 +83,7 @@ class TestPlaylistGeneration:
         with patch("backend.generator.get_llm_client") as mock_llm:
             mock_llm.return_value = MagicMock()
 
-            with patch("backend.generator.get_plex_client") as mock_plex:
+            with patch("backend.generator.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_tracks_by_filters.return_value = []
                 mock_plex.return_value = mock_plex_client
@@ -126,7 +128,7 @@ class TestPlaylistGeneration:
             ]
             mock_llm.return_value = mock_client
 
-            with patch("backend.generator.get_plex_client") as mock_plex:
+            with patch("backend.generator.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_tracks_by_filters.return_value = mock_plex_tracks[:5]
                 mock_plex.return_value = mock_plex_client
@@ -179,6 +181,10 @@ class TestTrackMatching:
 class TestNarrativeGeneration:
     """Tests for curator narrative generation."""
 
+    @pytest.fixture(autouse=True)
+    def no_retry_delay(self, monkeypatch):
+        monkeypatch.setattr("backend.generator.NARRATIVE_RETRY_DELAY", 0)
+
     def test_generate_narrative_returns_title_and_narrative(self, mocker):
         """Should generate creative title and narrative from track selections."""
         from backend.generator import generate_narrative
@@ -217,13 +223,62 @@ class TestNarrativeGeneration:
         track_selections = [{"artist": "Test", "title": "Song", "reason": "Test"}]
 
         mock_client = MagicMock()
-        mock_client.generate.side_effect = Exception("LLM error")
+        mock_client.analyze.side_effect = Exception("LLM error")
 
         title, narrative = generate_narrative(track_selections, mock_client)
 
         # Should return fallback title with date
         assert "Playlist" in title
         assert narrative == ""
+        assert mock_client.analyze.call_count == 2  # retried once
+
+    def test_generate_narrative_retries_transient_failure(self):
+        """A rate limit or timeout on the first try shouldn't leave a generic title (#14)."""
+        from backend.generator import generate_narrative
+
+        mock_client = MagicMock()
+        mock_client.analyze.side_effect = [RuntimeError("Error code: 429"), MagicMock()]
+        mock_client.parse_json_response.return_value = {"title": "Velvet Midnight", "narrative": "Smoky."}
+
+        title, narrative = generate_narrative([{"artist": "A", "title": "B"}], mock_client)
+
+        assert title.startswith("Velvet Midnight - ")
+        assert narrative == "Smoky."
+
+    def test_generate_narrative_accepts_key_variants(self):
+        from backend.generator import generate_narrative
+
+        for reply in (
+            {"Title": "Velvet Midnight", "Narrative": "Smoky."},
+            {"name": "Velvet Midnight", "description": "Smoky."},
+            {"playlist_title": "Velvet Midnight", "story": "Smoky."},
+        ):
+            mock_client = MagicMock()
+            mock_client.parse_json_response.return_value = reply
+            title, narrative = generate_narrative([{"artist": "A", "title": "B"}], mock_client)
+            assert title.startswith("Velvet Midnight - "), reply
+            assert narrative == "Smoky.", reply
+
+    def test_generate_narrative_falls_back_to_request(self):
+        """When the AI title can't be had, name the playlist after the request."""
+        from backend.generator import generate_narrative
+
+        mock_client = MagicMock()
+        mock_client.analyze.side_effect = TimeoutError("timed out")
+
+        title, narrative = generate_narrative(
+            [{"artist": "A", "title": "B"}], mock_client, "late night mellow jazz"
+        )
+
+        assert title.startswith("Late Night Mellow Jazz - ")
+        assert narrative == ""
+
+    def test_fallback_title_is_kept_short(self):
+        from backend.generator import _fallback_title
+
+        title = _fallback_title("upbeat instrumental jazz for a long dinner party with old friends tonight")
+        assert len(title) <= 40
+        assert title == "Upbeat Instrumental Jazz For A Long"
 
     def test_generate_narrative_passes_through_long_narrative(self, mocker):
         """Should pass through narrative without truncation (LLM prompt guides length)."""
@@ -417,3 +472,110 @@ class TestLiveVersionFiltering:
         assert is_live_version(MockTrack("Song", "2023-05-15 Show")) is True
         assert is_live_version(MockTrack("Song", "1999/12/31 New Years")) is True
         assert is_live_version(MockTrack("Song", "Regular Album 2023")) is False
+
+
+class TestArtistFilter:
+    """Artist filters reach the track source and the AI instructions (#9, #18)."""
+
+    def _track(self, key, artist):
+        from backend.models import Track
+        return Track(rating_key=key, title=f"Song {key}", artist=artist, album="A", duration_ms=1)
+
+    def test_fallback_without_cache_filters_by_artist(self, monkeypatch):
+        from backend.generator import _get_tracks_from_cache_or_plex
+
+        monkeypatch.setattr("backend.generator.library_cache.has_cached_tracks", lambda: False)
+        client = MagicMock()
+        client.get_tracks_by_filters.return_value = [
+            self._track("1", "Radiohead"), self._track("2", "Oasis"), self._track("3", "radiohead"),
+        ]
+
+        tracks = _get_tracks_from_cache_or_plex(
+            client, genres=None, decades=None, exclude_live=True, min_rating=0,
+            max_tracks_to_ai=500, artists=["Radiohead"],
+        )
+
+        assert [t.rating_key for t in tracks] == ["1", "3"]
+        assert client.get_tracks_by_filters.call_args.kwargs["limit"] == 0  # fetch all, then narrow
+
+    def test_cache_path_passes_artist_filters(self, monkeypatch):
+        from backend.generator import _get_tracks_from_cache_or_plex
+
+        monkeypatch.setattr("backend.generator.library_cache.has_cached_tracks", lambda: True)
+        get = MagicMock(return_value=[])
+        monkeypatch.setattr("backend.generator.library_cache.get_tracks_by_filters", get)
+
+        _get_tracks_from_cache_or_plex(
+            MagicMock(), genres=None, decades=None, exclude_live=True, min_rating=0,
+            max_tracks_to_ai=500, artists=["Radiohead"], exclude_artists=["Oasis"],
+        )
+
+        assert get.call_args.kwargs["artists"] == ["Radiohead"]
+        assert get.call_args.kwargs["exclude_artists"] == ["Oasis"]
+
+    def test_generation_prompt_names_requested_artists(self, monkeypatch):
+        from backend import generator
+        from backend.llm_client import LLMResponse
+
+        monkeypatch.setattr(generator, "NARRATIVE_RETRY_DELAY", 0)
+        monkeypatch.setattr(generator, "_get_tracks_from_cache_or_plex",
+                            lambda *a, **k: [self._track("1", "Radiohead")])
+        monkeypatch.setattr(generator.library_cache, "has_cached_tracks", lambda: True)
+        llm = MagicMock()
+        llm.generate.return_value = LLMResponse(content="[]", input_tokens=1, output_tokens=1, model="m")
+        llm.parse_json_response.return_value = []
+        monkeypatch.setattr(generator, "get_llm_client", lambda: llm)
+        monkeypatch.setattr(generator, "get_current_media_client", lambda: MagicMock())
+
+        list(generator.generate_playlist_stream(prompt="a Radiohead playlist", genres=[], decades=[],
+                                                artists=["Radiohead"]))
+
+        prompt = llm.generate.call_args.args[0]
+        assert "these artists, so every track is by them: Radiohead" in prompt
+        system = llm.generate.call_args.args[1]
+        assert "unless the user asked for specific artists" in system
+
+
+class TestNoMatches:
+    """When nothing the AI picked is in the library, say so instead of an empty playlist."""
+
+    @pytest.fixture(autouse=True)
+    def no_retry_delay(self, monkeypatch):
+        monkeypatch.setattr("backend.generator.NARRATIVE_RETRY_DELAY", 0)
+
+    def _run(self, monkeypatch, picks, narrative=None):
+        from backend import generator
+        from backend.llm_client import LLMResponse
+        from backend.models import Track
+
+        library = [Track(rating_key="1", title="Creep", artist="Radiohead", album="Pablo Honey", duration_ms=1)]
+        monkeypatch.setattr(generator, "_get_tracks_from_cache_or_plex", lambda *a, **k: library)
+        monkeypatch.setattr(generator.library_cache, "has_cached_tracks", lambda: True)
+        llm = MagicMock()
+        llm.generate.return_value = LLMResponse(content="[]", input_tokens=1, output_tokens=1, model="m")
+        llm.parse_json_response.side_effect = [picks, narrative or {}]
+        monkeypatch.setattr(generator, "get_llm_client", lambda: llm)
+        monkeypatch.setattr(generator, "get_current_media_client", lambda: MagicMock())
+        events = list(generator.generate_playlist_stream(prompt="rainy day", genres=[], decades=[]))
+        return events, llm
+
+    def test_no_matching_picks(self, monkeypatch):
+        events, llm = self._run(monkeypatch, [{"artist": "Nobody", "title": "Imaginary Song"}])
+
+        assert "event: error" in events[-1]
+        assert "None of the AI's 1 picks matched tracks in your library" in events[-1]
+        llm.analyze.assert_not_called()  # no title/story call for an empty playlist
+
+    def test_no_picks(self, monkeypatch):
+        events, _ = self._run(monkeypatch, [])
+        assert "The AI didn't pick any tracks" in events[-1]
+
+    def test_non_object_picks_are_skipped(self, monkeypatch):
+        events, _ = self._run(
+            monkeypatch,
+            ["Radiohead - Creep", {"artist": "Radiohead", "title": "Creep"}],
+            narrative={"title": "Rainy", "narrative": "Wet."},
+        )
+
+        complete = next(e for e in events if "event: complete" in e)
+        assert '"track_count": 1' in complete

@@ -1,0 +1,118 @@
+# Cloud models offered in Settings, grouped by provider.
+#
+# Costs are USD per million tokens. Prices updated Oct 2026.
+# Mark superseded models `legacy: true` rather than removing them, so saved configs keep working.
+# Provider defaults live in MODEL_DEFAULTS (backend/config.py).
+#
+# Optional fields:
+#   long_context_threshold, long_input_cost, long_output_cost:
+#     whole request is billed at the long rates above this many input tokens
+#   effort: reasoning effort to request, for models that support it
+#   legacy: still served, but superseded
+
+anthropic:
+  claude-opus-5-5:
+    label: Claude Opus 5.5
+    context: 1_000_000
+    input_cost: 4.00
+    output_cost: 20.00
+    effort: medium
+  claude-sonnet-5-5:
+    label: Claude Sonnet 5.5
+    context: 1_000_000
+    input_cost: 2.00
+    output_cost: 10.00
+    effort: medium
+  claude-haiku-4-5:
+    label: Claude Haiku 4.5
+    context: 200_000
+    input_cost: 1.00
+    output_cost: 5.00
+  claude-fable-5-1:
+    label: Claude Fable 5.1
+    context: 1_000_000
+    input_cost: 10.00
+    output_cost: 50.00
+    effort: medium
+  claude-sonnet-4-5:
+    label: Claude Sonnet 4.5
+    context: 200_000
+    input_cost: 3.00
+    output_cost: 15.00
+    legacy: true
+
+openai:
+  gpt-6.1-sol:
+    label: GPT-6.1 Sol
+    context: 1_050_000
+    input_cost: 2.00
+    output_cost: 10.00
+    long_context_threshold: 272_000
+    long_input_cost: 4.00
+    long_output_cost: 15.00
+    effort: low
+  gpt-6-luna:
+    label: GPT-6 Luna
+    context: 1_050_000
+    input_cost: 0.10
+    output_cost: 0.50
+    long_context_threshold: 272_000
+    long_input_cost: 0.20
+    long_output_cost: 0.75
+    effort: low
+  gpt-6-astra:
+    label: GPT-6 Astra
+    context: 1_050_000
+    input_cost: 10.00
+    output_cost: 50.00
+    long_context_threshold: 272_000
+    long_input_cost: 20.00
+    long_output_cost: 75.00
+    effort: low
+  gpt-4.1:
+    label: GPT-4.1
+    context: 128_000
+    input_cost: 2.00
+    output_cost: 8.00
+    legacy: true
+  gpt-4.1-mini:
+    label: GPT-4.1 mini
+    context: 128_000
+    input_cost: 0.40
+    output_cost: 1.60
+    legacy: true
+
+gemini:
+  # TODO: 3.8 Flash goes to $1.50 / $7.50 on 2027-01-01
+  gemini-3.8-flash:
+    label: Gemini 3.8 Flash
+    context: 1_000_000
+    input_cost: 0.75
+    output_cost: 3.75
+  gemini-3.5-flash:
+    label: Gemini 3.5 Flash
+    context: 1_000_000
+    input_cost: 1.50
+    output_cost: 9.00
+  gemini-3.5-flash-lite:
+    label: Gemini 3.5 Flash-Lite
+    context: 1_000_000
+    input_cost: 0.30
+    output_cost: 2.50
+  gemini-3.1-flash-lite:
+    label: Gemini 3.1 Flash-Lite
+    context: 1_000_000
+    input_cost: 0.25
+    output_cost: 1.50
+  gemini-2.5-flash:
+    label: Gemini 2.5 Flash
+    context: 1_000_000
+    input_cost: 0.30
+    output_cost: 2.50
+    legacy: true
+  gemini-2.5-pro:
+    label: Gemini 2.5 Pro
+    context: 1_000_000
+    input_cost: 1.25
+    output_cost: 5.00
+    legacy: true

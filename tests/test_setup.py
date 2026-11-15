@@ -1,7 +1,7 @@
 """Tests for setup/onboarding endpoints."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -40,6 +40,10 @@ def create_mock_config(**overrides):
     }
     defaults.update(overrides)
     mock = MagicMock()
+    mock.media_server = "plex"
+    mock.jellyfin.url = ""
+    mock.jellyfin.token = ""
+    mock.jellyfin.music_library = "Music"
     mock.plex.url = defaults["plex_url"]
     mock.plex.token = defaults["plex_token"]
     mock.plex.music_library = defaults["music_library"]
@@ -201,24 +205,54 @@ class TestSetupValidateAI:
     """Tests for POST /api/setup/validate-ai."""
 
     def test_validate_ollama_success(self, client):
-        """Should validate Ollama by checking connection status."""
+        """Should validate Ollama and save the chosen model with its context window."""
+        from backend.models import OllamaModelInfo
+
         mock_status = MagicMock()
         mock_status.connected = True
+        info = OllamaModelInfo(name="qwen3:8b", context_window=40960)
 
         with (
             patch("backend.main.get_ollama_status", return_value=mock_status),
-            patch("backend.main.update_config_values", return_value=create_mock_config(llm_provider="ollama")),
+            patch("backend.main.get_ollama_model_info", return_value=info),
+            patch("backend.main.update_config_values", return_value=create_mock_config(llm_provider="ollama")) as update,
             patch("backend.main.init_llm_client"),
         ):
             response = client.post("/api/setup/validate-ai", json={
                 "provider": "ollama",
                 "ollama_url": "http://localhost:11434",
+                "ollama_model": "qwen3:8b",
             })
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert "Ollama" in data["provider_name"]
+        saved = update.call_args.args[0]
+        assert saved["model_analysis"] == saved["model_generation"] == "qwen3:8b"
+        assert saved["ollama_context_window"] == 40960
+
+    def test_validate_ollama_requires_a_model(self, client):
+        """The wizard used to save Ollama with no model, so generation failed later."""
+        mock_status = MagicMock(connected=True)
+        with patch("backend.main.get_ollama_status", return_value=mock_status):
+            data = client.post("/api/setup/validate-ai", json={"provider": "ollama"}).json()
+
+        assert data["success"] is False
+        assert data["error"] == "Choose a model"
+
+    def test_validate_ollama_unknown_model(self, client):
+        mock_status = MagicMock(connected=True)
+        with (
+            patch("backend.main.get_ollama_status", return_value=mock_status),
+            patch("backend.main.get_ollama_model_info", return_value=None),
+        ):
+            data = client.post("/api/setup/validate-ai", json={
+                "provider": "ollama", "ollama_model": "missing:1b",
+            }).json()
+
+        assert data == {"success": False, "error": "Model missing:1b not found in Ollama",
+                        "provider_name": "Ollama (Local)"}
 
     def test_validate_ollama_failure(self, client):
         """Should return error when Ollama is unreachable."""
@@ -265,6 +299,42 @@ class TestSetupValidateAI:
 
         assert response.status_code == 200
         assert response.json()["success"] is True
+
+
+    def test_validate_custom_saves_key_and_model(self, client):
+        """The wizard saves the custom endpoint's key and model, not just its URL (#20)."""
+        models_response = MagicMock(raise_for_status=MagicMock())
+        http = MagicMock()
+        http.get = AsyncMock(return_value=models_response)
+        http.__aenter__ = AsyncMock(return_value=http)
+        http.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("backend.main.httpx.AsyncClient", return_value=http),
+            patch("backend.main.update_config_values", return_value=create_mock_config(llm_provider="custom")) as update,
+            patch("backend.main.init_llm_client"),
+        ):
+            response = client.post("/api/setup/validate-ai", json={
+                "provider": "custom",
+                "api_key": "mammouth-key",
+                "custom_url": "https://api.mammouth.ai/v1",
+                "custom_model": "gpt-4o-mini",
+            })
+
+        assert response.json()["success"] is True
+        assert http.get.call_args.kwargs["headers"] == {"Authorization": "Bearer mammouth-key"}
+        saved = update.call_args.args[0]
+        assert saved["llm_api_key"] == "mammouth-key"
+        assert saved["model_analysis"] == saved["model_generation"] == "gpt-4o-mini"
+
+    def test_validate_custom_requires_model(self, client):
+        response = client.post("/api/setup/validate-ai", json={
+            "provider": "custom", "custom_url": "https://api.mammouth.ai/v1",
+        })
+
+        assert response.json() == {
+            "success": False, "error": "Model name is required", "provider_name": "Custom (OpenAI-compatible)",
+        }
 
 
 class TestSetupComplete:

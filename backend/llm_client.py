@@ -13,36 +13,13 @@ import httpx
 from json_repair import repair_json
 import openai
 
+from backend.model_catalog import CATALOG_BY_ID
 from backend.models import LLMConfig, OllamaModel, OllamaModelInfo, OllamaModelsResponse, OllamaStatus
 
 logger = logging.getLogger(__name__)
 
+_TIMEOUT_ERRORS = (httpx.TimeoutException, anthropic.APITimeoutError, openai.APITimeoutError)
 
-# Cost per million tokens (updated Feb 2026)
-MODEL_COSTS = {
-    # Anthropic models (input/output per million tokens)
-    "claude-sonnet-4-5": {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-    # OpenAI models
-    "gpt-4.1": {"input": 2.00, "output": 8.00},
-    "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
-    # Google Gemini models
-    "gemini-2.5-pro": {"input": 1.25, "output": 5.00},
-    "gemini-2.5-flash": {"input": 0.30, "output": 2.50},
-}
-
-# Context limits per model (in tokens) - used to calculate max tracks
-MODEL_CONTEXT_LIMITS = {
-    # Anthropic
-    "claude-sonnet-4-5": 200_000,
-    "claude-haiku-4-5": 200_000,
-    # OpenAI
-    "gpt-4.1": 128_000,
-    "gpt-4.1-mini": 128_000,
-    # Google Gemini
-    "gemini-2.5-pro": 1_000_000,
-    "gemini-2.5-flash": 1_000_000,
-}
 
 # Tokens per track (based on real-world testing, Feb 2026)
 TOKENS_PER_TRACK = 40
@@ -59,6 +36,7 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     model: str
+    local: bool = False  # Ollama or a custom endpoint: no per-token cost
 
     @property
     def total_tokens(self) -> int:
@@ -67,6 +45,8 @@ class LLMResponse:
 
     def estimated_cost(self) -> float:
         """Estimate cost in USD based on token usage."""
+        if self.local:
+            return 0.0
         return estimate_cost_for_model(self.model, self.input_tokens, self.output_tokens)
 
 
@@ -84,7 +64,7 @@ def estimate_cost_for_model(
     Returns:
         Estimated cost in USD (0.0 for local providers)
     """
-    costs = get_model_cost(model, config)
+    costs = get_model_cost(model, config, input_tokens)
     input_cost = (input_tokens / 1_000_000) * costs["input"]
     output_cost = (output_tokens / 1_000_000) * costs["output"]
     return input_cost + output_cost
@@ -103,17 +83,22 @@ class LLMClient:
         self.provider = config.provider
         self._client: Any = None
 
+        timeout = config.request_timeout
         if config.provider == "anthropic":
-            self._client = anthropic.Anthropic(api_key=config.api_key)
+            self._client = anthropic.Anthropic(api_key=config.api_key, timeout=timeout)
         elif config.provider == "openai":
-            self._client = openai.OpenAI(api_key=config.api_key)
+            self._client = openai.OpenAI(api_key=config.api_key, timeout=timeout)
         elif config.provider == "gemini":
-            self._client = genai.Client(api_key=config.api_key)
+            self._client = genai.Client(
+                api_key=config.api_key,
+                http_options=genai_types.HttpOptions(timeout=timeout * 1000),  # milliseconds
+            )
         elif config.provider == "custom":
             # Custom OpenAI-compatible endpoint
             self._client = openai.OpenAI(
                 api_key=config.api_key or "not-needed",  # Use configured key or placeholder
                 base_url=config.custom_url,
+                timeout=timeout,
             )
         # Note: Ollama uses httpx directly, no persistent client needed
 
@@ -122,15 +107,24 @@ class LLMClient:
     ) -> LLMResponse:
         """Make a completion request to Anthropic."""
         logger.info("Calling Anthropic API with %d char prompt", len(prompt))
+        kwargs: dict[str, Any] = {}
+        entry = CATALOG_BY_ID.get(model)
+        if entry and entry.effort:
+            kwargs["output_config"] = {"effort": entry.effort}
         response = self._client.messages.create(
             model=model,
-            max_tokens=8192,
+            max_tokens=16000,  # Includes thinking tokens on models that think
             system=system,
             messages=[{"role": "user", "content": prompt}],
+            **kwargs,
         )
         logger.debug("Anthropic response received")
 
-        content = response.content[0].text
+        if response.stop_reason == "refusal":
+            raise RuntimeError(f"{model} declined this request; try rephrasing or another model")
+
+        # Skip thinking blocks
+        content = "".join(block.text for block in response.content if block.type == "text")
         return LLMResponse(
             content=content,
             input_tokens=response.usage.input_tokens,
@@ -143,13 +137,22 @@ class LLMClient:
     ) -> LLMResponse:
         """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
         logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
+        kwargs: dict[str, Any] = {}
+        if self.provider == "openai":
+            # Reasoning models reject max_tokens
+            kwargs["max_completion_tokens"] = 16000
+            entry = CATALOG_BY_ID.get(model)
+            if entry and entry.effort:
+                kwargs["reasoning_effort"] = entry.effort
+        else:
+            kwargs["max_tokens"] = 8192
         response = self._client.chat.completions.create(
             model=model,
-            max_tokens=8192,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
+            **kwargs,
         )
         logger.debug("OpenAI-compatible response received")
 
@@ -225,16 +228,13 @@ class LLMClient:
         # All retries exhausted
         raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {last_error}")
 
-    def _complete_ollama(
-        self, prompt: str, system: str, model: str, timeout: float = 600.0
-    ) -> LLMResponse:
+    def _complete_ollama(self, prompt: str, system: str, model: str) -> LLMResponse:
         """Make a completion request to Ollama.
 
         Args:
             prompt: User prompt
             system: System prompt
             model: Model name (e.g., "llama3:8b")
-            timeout: Request timeout in seconds (default 10 minutes for slow hardware)
 
         Returns:
             LLMResponse with content and token counts
@@ -242,7 +242,7 @@ class LLMClient:
         logger.info("Calling Ollama API with %d char prompt", len(prompt))
         ollama_url = self.config.ollama_url.rstrip("/")
 
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=self.config.request_timeout) as client:
             response = client.post(
                 f"{ollama_url}/api/generate",
                 json={
@@ -250,6 +250,9 @@ class LLMClient:
                     "prompt": prompt,
                     "system": system,
                     "stream": False,
+                    # Ollama otherwise uses its small default context and silently drops the
+                    # start of prompts sized for the model's full context window
+                    "options": {"num_ctx": self.config.ollama_context_window},
                 },
             )
             response.raise_for_status()
@@ -257,7 +260,8 @@ class LLMClient:
 
         logger.debug("Ollama response received")
 
-        content = data.get("response", "")
+        # Older Ollama versions put reasoning models' thinking inline
+        content = re.sub(r"<think>.*?</think>", "", data.get("response", ""), flags=re.DOTALL).strip()
         # Ollama returns token counts in the response
         # prompt_eval_count is input tokens, eval_count is output tokens
         input_tokens = data.get("prompt_eval_count", 0)
@@ -281,16 +285,33 @@ class LLMClient:
 
     def _complete(self, prompt: str, system: str, model: str) -> LLMResponse:
         """Make a completion request to the configured provider."""
-        if self.provider == "anthropic":
-            return self._complete_anthropic(prompt, system, model)
-        elif self.provider in ("openai", "custom"):
-            return self._complete_openai(prompt, system, model)
-        elif self.provider == "gemini":
-            return self._complete_gemini(prompt, system, model)
-        elif self.provider == "ollama":
-            return self._complete_ollama(prompt, system, model)
-        else:
+        complete = {
+            "anthropic": self._complete_anthropic,
+            "openai": self._complete_openai,
+            "custom": self._complete_openai,
+            "gemini": self._complete_gemini,
+            "ollama": self._complete_ollama,
+        }.get(self.provider)
+        if not complete:
             raise ValueError(f"Unknown provider: {self.provider}")
+        if not model:
+            # Otherwise the provider gets an empty model name and returns a cryptic error
+            raise RuntimeError("No AI model is set. Choose one in Settings.")
+        cloud_names = {"anthropic": "Anthropic", "openai": "OpenAI", "gemini": "Gemini"}
+        if self.provider in cloud_names and not self.config.api_key:
+            raise RuntimeError(f"No API key is set for {cloud_names[self.provider]}. Add one in Settings.")
+
+        try:
+            response = complete(prompt, system, model)
+        except _TIMEOUT_ERRORS as e:
+            seconds = self.config.request_timeout
+            waited = f"{seconds} seconds" if seconds < 120 else f"{seconds / 60:g} minutes"
+            raise RuntimeError(
+                f"The AI didn't respond within {waited}. Raise Request Timeout in "
+                "Settings, or send fewer tracks to the AI."
+            ) from e
+        response.local = self.provider in ("ollama", "custom")
+        return response
 
     def analyze(self, prompt: str, system: str) -> LLMResponse:
         """Use the analysis model for understanding tasks.
@@ -527,8 +548,8 @@ def get_model_context_limit(model: str, config: LLMConfig | None = None) -> int:
         Context limit in tokens
     """
     # Check standard model limits first
-    if model in MODEL_CONTEXT_LIMITS:
-        return MODEL_CONTEXT_LIMITS[model]
+    if model in CATALOG_BY_ID:
+        return CATALOG_BY_ID[model].context
 
     # For local providers, use config-based context window
     if config:
@@ -540,12 +561,15 @@ def get_model_context_limit(model: str, config: LLMConfig | None = None) -> int:
     return 128_000  # Default fallback
 
 
-def get_model_cost(model: str, config: LLMConfig | None = None) -> dict[str, float]:
+def get_model_cost(
+    model: str, config: LLMConfig | None = None, input_tokens: int = 0
+) -> dict[str, float]:
     """Get cost per million tokens for a model.
 
     Args:
         model: Model name
         config: Optional LLMConfig to check for local providers
+        input_tokens: Request size, for models with long-context pricing
 
     Returns:
         Dict with "input" and "output" cost per million tokens
@@ -554,7 +578,12 @@ def get_model_cost(model: str, config: LLMConfig | None = None) -> dict[str, flo
     if config and config.provider in ("ollama", "custom"):
         return {"input": 0.0, "output": 0.0}
 
-    return MODEL_COSTS.get(model, {"input": 1.0, "output": 2.0})
+    entry = CATALOG_BY_ID.get(model)
+    if not entry:
+        return {"input": 1.0, "output": 2.0}
+    if entry.long_context_threshold and input_tokens > entry.long_context_threshold:
+        return {"input": entry.long_input_cost, "output": entry.long_output_cost}
+    return {"input": entry.input_cost, "output": entry.output_cost}
 
 
 # =============================================================================

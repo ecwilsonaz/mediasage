@@ -1,5 +1,6 @@
 """Pydantic models for MediaSage API contracts and internal data structures."""
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -18,7 +19,7 @@ def album_key(artist: str, album: str, lower: bool = True) -> str:
 
 
 class Track(BaseModel):
-    """A music track from the Plex library."""
+    """A music track from the media library."""
 
     rating_key: str
     title: str
@@ -28,6 +29,7 @@ class Track(BaseModel):
     year: int | None = None
     genres: list[str] = []
     art_url: str | None = None
+    user_rating: int | None = None  # 0-10 scale; Plex only
 
     @property
     def duration_formatted(self) -> str:
@@ -93,11 +95,20 @@ class PlexConfig(BaseModel):
     music_library: str = "Music"
 
 
+class JellyfinConfig(BaseModel):
+    """Jellyfin server connection settings."""
+
+    url: str = ""
+    token: str = ""  # API key from Jellyfin Dashboard > API Keys
+    music_library: str = "Music"
+
+
 class LLMConfig(BaseModel):
     """LLM provider settings."""
 
     provider: Literal["anthropic", "openai", "gemini", "ollama", "custom"]
-    api_key: str = ""  # Optional for local providers
+    api_key: str = ""  # The active provider's key; optional for local providers
+    api_keys: dict[str, str] = {}  # Keys saved in Settings, by provider (not from env vars)
     model_analysis: str
     model_generation: str
     smart_generation: bool = False
@@ -106,6 +117,14 @@ class LLMConfig(BaseModel):
     ollama_context_window: int = 32768  # Detected from model, can be overridden
     custom_url: str = ""
     custom_context_window: int = 32768
+    request_timeout: int = 600  # Seconds to wait for an AI response; local models can be slow
+
+    @field_validator("request_timeout")
+    @classmethod
+    def validate_request_timeout(cls, v: int) -> int:
+        if v < 30:
+            raise ValueError("Request timeout must be at least 30 seconds")
+        return v
 
     @field_validator("ollama_context_window", "custom_context_window")
     @classmethod
@@ -126,9 +145,12 @@ class DefaultsConfig(BaseModel):
 class AppConfig(BaseModel):
     """Root configuration object."""
 
+    media_server: Literal["plex", "jellyfin"] = "plex"
     plex: PlexConfig
+    jellyfin: JellyfinConfig = JellyfinConfig()
     llm: LLMConfig
     defaults: DefaultsConfig = DefaultsConfig()
+    library_sync_hours: float = Field(24, ge=0)  # Re-sync the cache once it's this old; 0 = never
 
 
 # =============================================================================
@@ -141,6 +163,13 @@ class GenreCount(BaseModel):
 
     name: str
     count: int | None = None
+
+
+class ArtistCount(BaseModel):
+    """Artist with track count."""
+
+    name: str
+    count: int
 
 
 class DecadeCount(BaseModel):
@@ -169,6 +198,7 @@ class AnalyzePromptResponse(BaseModel):
 
     suggested_genres: list[str]
     suggested_decades: list[str]
+    suggested_artists: list[str] = []  # Artists the prompt names that are in the library
     available_genres: list[GenreCount]
     available_decades: list[DecadeCount]
     reasoning: str
@@ -196,9 +226,11 @@ class FilterPreviewRequest(BaseModel):
 
     genres: list[str] = []
     decades: list[str] = []
+    artists: list[str] = []  # Only these artists
+    exclude_artists: list[str] = []
     track_count: int = 25
     max_tracks_to_ai: int = 500  # 0 = no limit
-    min_rating: int = 0  # 0 = any, 2/4/6/8/10 = minimum rating (Plex uses 0-10)
+    min_rating: int = Field(0, ge=0, le=10)  # Plex 0-10 scale (half star = 1); 0 = any
     exclude_live: bool = True
 
 
@@ -228,9 +260,11 @@ class GenerateRequest(BaseModel):
     refinement_answers: list[str | None] | None = None
     genres: list[str]
     decades: list[str]
+    artists: list[str] = []  # Only these artists
+    exclude_artists: list[str] = []
     track_count: int = 25
     exclude_live: bool = True
-    min_rating: int = 0  # 0 = any, 2/4/6/8/10 = minimum rating
+    min_rating: int = Field(0, ge=0, le=10)  # Plex 0-10 scale (half star = 1); 0 = any
     max_tracks_to_ai: int = 500  # 0 = no limit
 
     @model_validator(mode="after")
@@ -252,12 +286,16 @@ class GenerateResponse(BaseModel):
     track_reasons: dict[str, str] = {}
 
 
+# Plex rating keys are numeric; Jellyfin item IDs are 32 hex characters
+_ITEM_ID_RE = re.compile(r"^(\d+|[0-9a-f]{32})$")
+
+
 def _validate_rating_keys(v: list[str]) -> list[str]:
-    """Validate a list of Plex rating keys (must be non-empty, all numeric)."""
+    """Validate a non-empty list of Plex or Jellyfin item IDs."""
     if not v:
         raise ValueError("At least one track is required")
     for key in v:
-        if not key.isdigit():
+        if not _ITEM_ID_RE.match(key):
             raise ValueError(f"Invalid rating key: {key}")
     return v
 
@@ -343,8 +381,8 @@ class UpdatePlaylistRequest(BaseModel):
     @field_validator("playlist_id")
     @classmethod
     def validate_playlist_id(cls, v: str) -> str:
-        if v != "__scratch__" and not v.isdigit():
-            raise ValueError("playlist_id must be '__scratch__' or a numeric rating key")
+        if v != "__scratch__" and not _ITEM_ID_RE.match(v):
+            raise ValueError("playlist_id must be '__scratch__' or a Plex/Jellyfin ID")
         return v
 
     @field_validator("rating_keys")
@@ -400,13 +438,19 @@ class ConfigResponse(BaseModel):
     """Config without secrets for display."""
 
     version: str
+    media_server: str = "plex"
     plex_url: str
-    plex_connected: bool
+    plex_connected: bool  # The active media server, Plex or Jellyfin
     plex_token_set: bool  # True if token is configured (without revealing it)
     music_library: str | None
+    # Jellyfin fields
+    jellyfin_url: str = ""
+    jellyfin_token_set: bool = False
+    jellyfin_music_library: str = "Music"
     llm_provider: str
     llm_configured: bool
     llm_api_key_set: bool  # True if API key is configured (without revealing it)
+    api_key_providers: list[str] = []  # Providers with a key saved or set by environment variable
     model_analysis: str  # The analysis model being used
     model_generation: str  # The generation model being used
     max_tracks_to_ai: int  # Recommended max tracks for this model
@@ -421,16 +465,28 @@ class ConfigResponse(BaseModel):
     ollama_context_window: int = 32768
     custom_url: str = ""
     custom_context_window: int = 32768
+    request_timeout: int = 600
+    library_sync_hours: float = 24
     is_local_provider: bool = False
-    provider_from_env: bool = False  # True if LLM_PROVIDER env var is overriding UI
+    # Settings fields set by environment variables (which override Settings), e.g. {"plex_url": "PLEX_URL"}
+    env_overrides: dict[str, str] = {}
+    # Generation model's long-context pricing, if any
+    long_context_threshold: int | None = None
+    long_context_cost_per_million_input: float | None = None
+    long_context_cost_per_million_output: float | None = None
 
 
 class UpdateConfigRequest(BaseModel):
     """Partial config update."""
 
+    media_server: str | None = None
     plex_url: str | None = None
     plex_token: str | None = None
     music_library: str | None = None
+    # Jellyfin fields
+    jellyfin_url: str | None = None
+    jellyfin_token: str | None = None
+    jellyfin_music_library: str | None = None
     llm_provider: str | None = None
     llm_api_key: str | None = None
     model_analysis: str | None = None
@@ -440,6 +496,8 @@ class UpdateConfigRequest(BaseModel):
     ollama_context_window: int | None = None
     custom_url: str | None = None
     custom_context_window: int | None = None
+    request_timeout: int | None = None
+    library_sync_hours: float | None = Field(None, ge=0)
 
 
 class HealthResponse(BaseModel):
@@ -448,6 +506,7 @@ class HealthResponse(BaseModel):
     status: str
     plex_connected: bool
     llm_configured: bool
+    media_server: str = "plex"
 
 
 class ErrorResponse(BaseModel):
@@ -468,6 +527,32 @@ class OllamaModel(BaseModel):
     name: str
     size: int = 0
     modified_at: str = ""
+
+
+class CloudModel(BaseModel):
+    """A cloud model offered in Settings."""
+
+    id: str
+    label: str
+    context_window: int
+    max_tracks: int
+    cost_per_million_input: float
+    cost_per_million_output: float
+    legacy: bool = False
+
+
+class CloudProviderModels(BaseModel):
+    """Models offered for one cloud provider, with its defaults."""
+
+    models: list[CloudModel]
+    default_analysis: str
+    default_generation: str
+
+
+class CloudModelsResponse(BaseModel):
+    """Cloud models keyed by provider."""
+
+    providers: dict[str, CloudProviderModels]
 
 
 class OllamaModelInfo(BaseModel):
@@ -517,6 +602,12 @@ class LibraryCacheStatusResponse(BaseModel):
     error: str | None = None
     plex_connected: bool
     needs_resync: bool = False
+    # For the retry loop and external health checks
+    sync_kind: str | None = None          # "full" or "incremental" (last attempt)
+    last_attempt_at: str | None = None    # last sync start in this process
+    error_at: str | None = None
+    incremental_at: str | None = None     # watermark: tracks changed after this are picked up next time
+    interrupted: bool = False             # a full sync was running when the process died (re-sync pending)
 
 
 class SyncTriggerResponse(BaseModel):
@@ -804,9 +895,13 @@ class SetupStatusResponse(BaseModel):
     process_uid: int = 0
     process_gid: int = 0
     data_dir: str = ""
+    media_server: str = "plex"
     plex_connected: bool
     plex_error: str | None = None
     plex_from_env: bool = False
+    jellyfin_connected: bool = False
+    jellyfin_error: str | None = None
+    jellyfin_from_env: bool = False
     music_libraries: list[str] = []
     llm_configured: bool
     llm_provider: str = ""
@@ -835,6 +930,24 @@ class ValidatePlexResponse(BaseModel):
     music_libraries: list[str] = []
 
 
+class ValidateJellyfinRequest(BaseModel):
+    """Request to validate Jellyfin credentials during setup."""
+
+    jellyfin_url: str
+    jellyfin_token: str
+    music_library: str = "Music"
+
+
+class ValidateJellyfinResponse(BaseModel):
+    """Response from Jellyfin validation."""
+
+    success: bool
+    error: str | None = None
+    server_name: str | None = None
+    music_libraries: list[str] = []
+    user_id: str | None = None
+
+
 class ValidateAIRequest(BaseModel):
     """Request to validate AI provider credentials during setup."""
 
@@ -842,6 +955,8 @@ class ValidateAIRequest(BaseModel):
     api_key: str = ""
     ollama_url: str = ""
     custom_url: str = ""
+    custom_model: str = ""
+    ollama_model: str = ""
 
 
 class ValidateAIResponse(BaseModel):

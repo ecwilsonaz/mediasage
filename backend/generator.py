@@ -2,15 +2,43 @@
 
 import json
 import logging
+import random
+import time
 from collections.abc import Generator
 from datetime import datetime
 
 from backend.llm_client import get_llm_client
 from backend.models import GenerateResponse, Track
-from backend.plex_client import PlexQueryError, get_plex_client
+from backend.plex_client import PlexQueryError
+from backend.config import get_current_media_client
 from backend import library_cache
 
 logger = logging.getLogger(__name__)
+
+
+NARRATIVE_ATTEMPTS = 2
+NARRATIVE_RETRY_DELAY = 2.0  # seconds; a second request right after generation can hit rate limits
+
+
+def _get_ci(result: dict, *keys: str) -> str:
+    """First non-empty string value among keys, matching keys case-insensitively."""
+    lowered = {str(k).lower(): v for k, v in result.items()}
+    for key in keys:
+        value = lowered.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _fallback_title(user_request: str) -> str:
+    """Name the playlist after the request when the AI title isn't available."""
+    words = user_request.split()
+    title = ""
+    for word in words:
+        if len(title) + len(word) > 40:
+            break
+        title = f"{title} {word}".strip()
+    return title.title() if title else "Playlist"
 
 
 def generate_narrative(
@@ -26,8 +54,8 @@ def generate_narrative(
         user_request: Original user prompt/request for context
 
     Returns:
-        Tuple of (playlist_title with date, narrative)
-        On failure, returns ("{Mon YYYY} Playlist", "")
+        Tuple of (playlist_title with date, narrative). If the AI call keeps failing,
+        the title is based on user_request and the narrative is empty.
     """
     # Build input for Query 2: track list with reasons
     tracks_with_reasons = "\n".join(
@@ -41,49 +69,34 @@ def generate_narrative(
     else:
         narrative_prompt = f"Selected tracks:\n{tracks_with_reasons}"
 
-    # Get current month/year for title suffix
     date_suffix = datetime.now().strftime("%b %Y")
-    fallback_title = f"{date_suffix} Playlist"
 
-    try:
-        # Use analysis model for better creative writing quality
-        response = llm_client.analyze(narrative_prompt, NARRATIVE_SYSTEM)
-        result = llm_client.parse_json_response(response)
+    for attempt in range(1, NARRATIVE_ATTEMPTS + 1):
+        try:
+            # Use analysis model for better creative writing quality
+            response = llm_client.analyze(narrative_prompt, NARRATIVE_SYSTEM)
+            result = llm_client.parse_json_response(response)
 
-        # Handle array-wrapped responses (some LLMs wrap in [])
-        if isinstance(result, list) and len(result) > 0:
-            result = result[0]
+            # Handle array-wrapped responses (some LLMs wrap in [])
+            if isinstance(result, list) and result:
+                result = result[0]
+            if not isinstance(result, dict):
+                raise ValueError(f"expected a JSON object, got {type(result).__name__}")
 
-        if not isinstance(result, dict):
-            logger.warning("Narrative response not a dict: %s", type(result).__name__)
-            return fallback_title, ""
+            raw_title = _get_ci(result, "title", "name", "playlist_title", "playlist_name")
+            narrative = _get_ci(result, "narrative", "description", "text", "content", "story")
+            if not raw_title:
+                raise ValueError(f"no title in response (keys: {list(result.keys())})")
+            if not narrative:
+                logger.warning("Narrative missing from response. Keys: %s", list(result.keys()))
+            return f"{raw_title} - {date_suffix}", narrative
 
-        raw_title = result.get("title", "").strip()
+        except Exception as e:
+            logger.warning("Narrative generation failed (attempt %d of %d): %s", attempt, NARRATIVE_ATTEMPTS, e)
+            if attempt < NARRATIVE_ATTEMPTS:
+                time.sleep(NARRATIVE_RETRY_DELAY)
 
-        # Try common alternate keys for narrative
-        narrative = (
-            result.get("narrative")
-            or result.get("description")
-            or result.get("text")
-            or result.get("content")
-            or ""
-        ).strip()
-
-        # Log if we got title but no narrative (helps debug)
-        if raw_title and not narrative:
-            logger.warning("Narrative missing from response. Keys: %s", list(result.keys()))
-
-        # Append date to title
-        if raw_title:
-            playlist_title = f"{raw_title} - {date_suffix}"
-        else:
-            playlist_title = fallback_title
-
-        return playlist_title, narrative
-
-    except Exception as e:
-        logger.warning("Narrative generation failed: %s", e)
-        return fallback_title, ""
+    return f"{_fallback_title(user_request)} - {date_suffix}", ""
 
 
 def _cached_track_to_model(cached: dict) -> Track:
@@ -107,13 +120,15 @@ def _get_tracks_from_cache_or_plex(
     exclude_live: bool,
     min_rating: int,
     max_tracks_to_ai: int,
+    artists: list[str] | None = None,
+    exclude_artists: list[str] | None = None,
 ) -> list[Track]:
-    """Get tracks from cache if available, otherwise from Plex.
+    """Get tracks from cache if available, otherwise from the media server.
 
     Returns:
         List of Track objects
     """
-    has_filters = genres or decades or min_rating > 0
+    has_filters = genres or decades or min_rating > 0 or artists or exclude_artists
     effective_limit = max_tracks_to_ai if max_tracks_to_ai > 0 else 2000
 
     # Try cache first
@@ -125,24 +140,37 @@ def _get_tracks_from_cache_or_plex(
             min_rating=min_rating,
             exclude_live=exclude_live,
             limit=effective_limit,
+            artists=artists,
+            exclude_artists=exclude_artists,
         )
         return [_cached_track_to_model(t) for t in cached_tracks]
 
-    # Fall back to Plex
-    logger.info("Cache empty, fetching from Plex")
+    logger.info("Cache empty, fetching from the media server")
     if not has_filters:
         return plex_client.get_random_tracks(
             count=effective_limit,
             exclude_live=exclude_live,
         )
-    else:
-        return plex_client.get_tracks_by_filters(
-            genres=genres,
-            decades=decades,
-            exclude_live=exclude_live,
-            min_rating=min_rating,
-            limit=effective_limit,
-        )
+
+    # The servers can't filter by artist, so fetch everything else that matches, then narrow
+    by_artist = artists or exclude_artists
+    tracks = plex_client.get_tracks_by_filters(
+        genres=genres,
+        decades=decades,
+        exclude_live=exclude_live,
+        min_rating=min_rating,
+        limit=0 if by_artist else effective_limit,
+    )
+    if by_artist:
+        include = {a.lower() for a in artists or []}
+        exclude = {a.lower() for a in exclude_artists or []}
+        tracks = [
+            t for t in tracks
+            if (not include or t.artist.lower() in include) and t.artist.lower() not in exclude
+        ]
+        if len(tracks) > effective_limit:
+            tracks = random.sample(tracks, effective_limit)
+    return tracks
 
 
 def generate_playlist_stream(
@@ -157,6 +185,8 @@ def generate_playlist_stream(
     exclude_live: bool = True,
     min_rating: int = 0,
     max_tracks_to_ai: int = 500,
+    artists: list[str] | None = None,
+    exclude_artists: list[str] | None = None,
 ) -> Generator[str, None, None]:
     """Generate a playlist with streaming progress updates.
 
@@ -168,16 +198,16 @@ def generate_playlist_stream(
     try:
         logger.info("Starting playlist generation (streaming)")
         llm_client = get_llm_client()
-        plex_client = get_plex_client()
+        media_client = get_current_media_client()
 
         if not llm_client:
             yield emit("error", {"message": "LLM client not initialized"})
             return
-        if not plex_client:
-            yield emit("error", {"message": "Plex client not initialized"})
+        if not media_client:
+            yield emit("error", {"message": "Media server not connected"})
             return
 
-        has_filters = genres or decades or min_rating > 0
+        has_filters = genres or decades or min_rating > 0 or artists or exclude_artists
 
         # Step 1: Fetch tracks from cache or Plex
         using_cache = library_cache.has_cached_tracks()
@@ -192,12 +222,14 @@ def generate_playlist_stream(
                     genres, decades, min_rating, using_cache)
         try:
             filtered_tracks = _get_tracks_from_cache_or_plex(
-                plex_client=plex_client,
+                plex_client=media_client,
                 genres=genres,
                 decades=decades,
                 exclude_live=exclude_live,
                 min_rating=min_rating,
                 max_tracks_to_ai=max_tracks_to_ai,
+                artists=artists,
+                exclude_artists=exclude_artists,
             )
         except PlexQueryError as e:
             yield emit("error", {"message": f"Plex server error: {e}"})
@@ -237,6 +269,11 @@ def generate_playlist_stream(
             if selected_dimensions:
                 generation_parts.append(f"Explore these dimensions: {', '.join(selected_dimensions)}")
 
+        if artists:
+            generation_parts.append(
+                f"The user asked for these artists, so every track is by them: {', '.join(artists)}"
+            )
+
         if additional_notes:
             generation_parts.append(f"Additional notes: {additional_notes}")
 
@@ -264,6 +301,8 @@ def generate_playlist_stream(
         if not isinstance(track_selections, list):
             yield emit("error", {"message": "LLM returned invalid track selection format"})
             return
+        # Small models sometimes return plain strings instead of {"artist", "title"} objects
+        track_selections = [sel for sel in track_selections if isinstance(sel, dict)]
 
         # Step 6: Match tracks
         yield emit("progress", {"step": "matching", "message": f"Matching {len(track_selections)} selections to library..."})
@@ -294,10 +333,22 @@ def generate_playlist_stream(
                         track_reasons[track.rating_key] = reason
                     break
 
+        if not matched_tracks:
+            if track_selections:
+                message = (
+                    f"None of the AI's {len(track_selections)} picks matched tracks in your library. "
+                    "The model probably made up track names; try again, or use a more capable model."
+                )
+            else:
+                message = "The AI didn't pick any tracks. Try again, or rephrase your request."
+            yield emit("error", {"message": message})
+            return
+
         # Step 7: Generate narrative
         yield emit("progress", {"step": "narrative", "message": "Writing playlist narrative..."})
 
-        playlist_title, narrative = generate_narrative(track_selections, llm_client, prompt or "")
+        user_request = prompt or (f"Inspired by {seed_track.title}" if seed_track else "")
+        playlist_title, narrative = generate_narrative(track_selections, llm_client, user_request)
         logger.info("Generated narrative: title='%s', narrative_len=%d", playlist_title, len(narrative))
 
         # Emit narrative event for frontend
@@ -403,7 +454,7 @@ Your task is to select tracks that best match the user's request. For each track
 
 Guidelines:
 - Select tracks that fit the mood, era, style, and other aspects of the request
-- Vary the selection - don't pick too many tracks from the same artist or album
+- Vary the selection - don't pick too many tracks from the same album, or from the same artist unless the user asked for specific artists
 - Consider the flow of the playlist - how tracks will sound in sequence
 - If using a seed track, don't include the seed track itself in the results
 

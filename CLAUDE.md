@@ -29,6 +29,7 @@ backend/
 ├── config.py            # Config loading (YAML + env vars)
 ├── plex_client.py       # Plex connection, queries, playlist creation
 ├── llm_client.py        # Claude/OpenAI abstraction
+├── model_catalog.py     # Loads model_catalog.yaml (cloud model pricing, context windows)
 ├── analyzer.py          # Prompt analysis + seed track dimensions
 ├── generator.py         # Playlist generation
 └── models.py            # Pydantic models
@@ -102,11 +103,11 @@ CUSTOM_CONTEXT_WINDOW=4096
 
 | Task | Anthropic | OpenAI | Gemini |
 |------|-----------|--------|--------|
-| Analysis | `claude-sonnet-4-5` | `gpt-4.1` | `gemini-2.5-flash` |
-| Generation | `claude-haiku-4-5` | `gpt-4.1-mini` | `gemini-2.5-flash` |
-| Context Limit | 200K tokens | 128K tokens | **1M tokens** |
+| Analysis | `claude-sonnet-5-5` | `gpt-6.1-sol` | `gemini-3.5-flash-lite` |
+| Generation | `claude-haiku-4-5` | `gpt-6-luna` | `gemini-3.5-flash-lite` |
+| Generation context | 200K tokens | 1.05M tokens | 1M tokens |
 
-Gemini's 1M context allows sending ~18,000 tracks to the AI, vs ~3,500 for Anthropic/OpenAI.
+All models, prices and context windows live in `model_catalog.yaml` (loaded by `backend/model_catalog.py`), which also feeds the Settings model dropdowns via `GET /api/models`. A 1M context fits ~22,000 tracks; Haiku's 200K fits ~4,400.
 
 Option: `smart_generation: true` uses analysis model for both (higher quality, ~3-5x cost)
 

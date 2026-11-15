@@ -8,6 +8,74 @@ from unittest.mock import MagicMock, patch
 class TestPromptAnalysis:
     """Tests for prompt analysis."""
 
+    @pytest.fixture(autouse=True)
+    def no_cache(self, monkeypatch):
+        monkeypatch.setattr("backend.analyzer.library_cache.has_cached_tracks", lambda: False)
+
+    def _llm(self, reply):
+        from backend.llm_client import LLMResponse
+
+        client = MagicMock()
+        client.analyze.return_value = LLMResponse(content=json.dumps(reply), input_tokens=1, output_tokens=1, model="m")
+        client.parse_json_response.return_value = reply
+        return client
+
+    def test_works_with_jellyfin_client(self):
+        """Prompt analysis used the Plex client directly, so it failed in Jellyfin mode."""
+        from backend.analyzer import analyze_prompt
+        from backend.jellyfin_client import JellyfinClient
+
+        jellyfin = MagicMock(spec=JellyfinClient)
+        jellyfin.get_library_stats.return_value = {"genres": [{"name": "Jazz", "count": 5}], "decades": []}
+        with patch("backend.analyzer.get_llm_client", return_value=self._llm({"genres": ["Jazz"], "decades": []})), \
+             patch("backend.analyzer.get_current_media_client", return_value=jellyfin):
+            result = analyze_prompt("late night jazz")
+
+        assert result.suggested_genres == ["Jazz"]
+
+    def test_suggests_named_artists_in_library(self, monkeypatch):
+        """'A Radiohead playlist' pre-fills the artist filter with library spellings (#18)."""
+        from backend.analyzer import analyze_prompt
+
+        monkeypatch.setattr("backend.analyzer.library_cache.has_cached_tracks", lambda: True)
+        monkeypatch.setattr("backend.analyzer.library_cache.get_cached_genre_decade_stats",
+                            lambda: {"genres": [], "decades": []})
+        monkeypatch.setattr("backend.analyzer.library_cache.get_artist_names",
+                            lambda: ["Radiohead", "The Beatles", "Sigur Rós"])
+        reply = {"genres": [], "decades": [], "artists": ["radiohead", "Beatles", "Sigur Ros", "Taylor Swift"]}
+        with patch("backend.analyzer.get_llm_client", return_value=self._llm(reply)), \
+             patch("backend.analyzer.get_current_media_client", return_value=MagicMock()):
+            result = analyze_prompt("Radiohead, the Beatles and Sigur Ros")
+
+        assert result.suggested_artists == ["Radiohead", "The Beatles", "Sigur Rós"]
+
+    def test_no_artist_suggestions_without_cache(self):
+        from backend.analyzer import analyze_prompt
+
+        media_client = MagicMock()
+        media_client.get_library_stats.return_value = {"genres": [], "decades": []}
+        with patch("backend.analyzer.get_llm_client", return_value=self._llm({"artists": ["Radiohead"]})), \
+             patch("backend.analyzer.get_current_media_client", return_value=media_client):
+            result = analyze_prompt("a Radiohead playlist")
+
+        assert result.suggested_artists == []
+
+    def test_uses_cached_genres_when_synced(self, monkeypatch):
+        from backend.analyzer import analyze_prompt
+
+        monkeypatch.setattr("backend.analyzer.library_cache.has_cached_tracks", lambda: True)
+        monkeypatch.setattr(
+            "backend.analyzer.library_cache.get_cached_genre_decade_stats",
+            lambda: {"genres": [{"name": "Jazz", "count": 5}], "decades": [{"name": "1990s", "count": 5}]},
+        )
+        media_client = MagicMock()
+        with patch("backend.analyzer.get_llm_client", return_value=self._llm({"genres": ["Jazz"], "decades": ["1990s"]})), \
+             patch("backend.analyzer.get_current_media_client", return_value=media_client):
+            result = analyze_prompt("90s jazz")
+
+        assert (result.suggested_genres, result.suggested_decades) == (["Jazz"], ["1990s"])
+        media_client.get_library_stats.assert_not_called()
+
     def test_analyze_prompt_extracts_genres(self, mocker):
         """Should extract suggested genres from prompt."""
         from backend.analyzer import analyze_prompt
@@ -30,7 +98,7 @@ class TestPromptAnalysis:
             mock_client.parse_json_response.return_value = json.loads(mock_response.content)
             mock_llm.return_value = mock_client
 
-            with patch("backend.analyzer.get_plex_client") as mock_plex:
+            with patch("backend.analyzer.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_library_stats.return_value = {
                     "genres": [{"name": "Alternative", "count": 100}, {"name": "Rock", "count": 200}],
@@ -61,7 +129,7 @@ class TestPromptAnalysis:
             mock_client.parse_json_response.side_effect = ValueError("Invalid JSON")
             mock_llm.return_value = mock_client
 
-            with patch("backend.analyzer.get_plex_client") as mock_plex:
+            with patch("backend.analyzer.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_library_stats.return_value = {
                     "genres": [{"name": "Rock", "count": 100}],
@@ -94,7 +162,7 @@ class TestPromptAnalysis:
             mock_client.parse_json_response.return_value = json.loads(mock_response.content)
             mock_llm.return_value = mock_client
 
-            with patch("backend.analyzer.get_plex_client") as mock_plex:
+            with patch("backend.analyzer.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_library_stats.return_value = {
                     "genres": [
@@ -143,7 +211,7 @@ class TestFilterSuggestions:
             mock_client.parse_json_response.return_value = json.loads(mock_response.content)
             mock_llm.return_value = mock_client
 
-            with patch("backend.analyzer.get_plex_client") as mock_plex:
+            with patch("backend.analyzer.get_current_media_client") as mock_plex:
                 mock_plex_client = MagicMock()
                 mock_plex_client.get_library_stats.return_value = {
                     "genres": [
