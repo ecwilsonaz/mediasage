@@ -33,7 +33,7 @@ def test_unraid_template_has_required_metadata() -> None:
         assert root.findtext(tag), f"missing required <{tag}> field"
 
     assert root.findtext("Name") == "MediaSage"
-    assert root.findtext("Repository") == "ghcr.io/ryanattanagra/mediasage:latest"
+    assert root.findtext("Repository") == "ghcr.io/ecwilsonaz/mediasage:latest"
     assert root.findtext("Shell") == "sh"
     assert root.findtext("Privileged") == "false"
     assert root.findtext("WebUI") == "http://[IP]:[PORT:5765]/"

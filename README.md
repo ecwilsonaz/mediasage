@@ -1,12 +1,10 @@
 # MediaSage for Plex and Jellyfin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GHCR](https://img.shields.io/badge/ghcr-ryanattanagra%2Fmediasage-blue)](https://github.com/RyanAtTanagra/mediasage/pkgs/container/mediasage)
+[![GHCR](https://img.shields.io/badge/ghcr-ecwilsonaz%2Fmediasage-blue)](https://github.com/ecwilsonaz/mediasage/pkgs/container/mediasage)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 
 **AI-powered playlists and album recommendations for Plex and Jellyfin—using only music you actually own.**
-
-> Maintained fork of [ecwilsonaz/mediasage](https://github.com/ecwilsonaz/mediasage) with Jellyfin support, current AI models, a model picker in Settings, and fixes from open upstream PRs.
 
 MediaSage is a self-hosted web app that creates playlists and recommends albums by combining LLM intelligence with your Plex or Jellyfin music library. Every suggestion is guaranteed playable because it only considers music you have.
 
@@ -35,7 +33,7 @@ docker run -d \
   -p 5765:5765 \
   -v mediasage-data:/app/data \
   --restart unless-stopped \
-  ghcr.io/ryanattanagra/mediasage:latest
+  ghcr.io/ecwilsonaz/mediasage:latest
 ```
 
 Open **http://localhost:5765** — a setup wizard walks you through connecting Plex or Jellyfin, choosing an AI provider, and syncing your library.
@@ -137,7 +135,7 @@ Bring your own API key—or run locally:
 | **Ollama** ⚗️ | Varies | Free | Privacy, local inference |
 | **Custom** ⚗️ | Configurable | Free | Self-hosted, OpenAI-compatible APIs |
 
-⚗️ *Local LLM support is experimental. [Report issues](https://github.com/RyanAtTanagra/mediasage/issues).*
+⚗️ *Local LLM support is experimental. [Report issues](https://github.com/ecwilsonaz/mediasage/issues).*
 
 > **Free option:** Google Gemini offers a free API tier that's more than enough for personal use — no credit card required. See the [Gemini free credit guide](docs/gemini-free-credit-guide.md) for setup instructions and details.
 
@@ -162,8 +160,8 @@ Estimated cost displays before you generate. MediaSage auto-detects your provide
 
 ```bash
 mkdir mediasage && cd mediasage
-curl -O https://raw.githubusercontent.com/RyanAtTanagra/mediasage/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/RyanAtTanagra/mediasage/main/.env.example
+curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/.env.example
 mv .env.example .env
 ```
 
@@ -188,7 +186,7 @@ GEMINI_API_KEY=your-gemini-key
 <summary><strong>Synology (Container Manager)</strong></summary>
 
 **GUI:**
-1. **Container Manager** → **Registry** → Search `ghcr.io/ryanattanagra/mediasage`
+1. **Container Manager** → **Registry** → Search `ghcr.io/ecwilsonaz/mediasage`
 2. Download `latest` tag
 3. **Container** → **Create**
 4. Port: 5765 → 5765
@@ -198,8 +196,8 @@ GEMINI_API_KEY=your-gemini-key
 **Docker Compose:**
 ```bash
 mkdir -p /volume1/docker/mediasage && cd /volume1/docker/mediasage
-curl -O https://raw.githubusercontent.com/RyanAtTanagra/mediasage/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/RyanAtTanagra/mediasage/main/.env.example
+curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/.env.example
 mv .env.example .env && nano .env
 ```
 Then in **Container Manager** → **Project** → **Create**, point to `/volume1/docker/mediasage`.
@@ -215,7 +213,7 @@ A submission-ready Community Apps template is included at
 [`unraid/mediasage.xml`](unraid/mediasage.xml). Until MediaSage is listed in
 Community Apps, install it through **Docker → Add Container**:
 
-1. Repository: `ghcr.io/ryanattanagra/mediasage:latest`
+1. Repository: `ghcr.io/ecwilsonaz/mediasage:latest`
 2. Port: 5765 → 5765
 3. App data: `/mnt/user/appdata/mediasage` → `/app/data`
 4. Open the WebUI and complete the setup wizard
@@ -233,7 +231,7 @@ requires repository-owner review even when the XML is already present.
 <summary><strong>TrueNAS SCALE</strong></summary>
 
 1. **Apps** → **Discover Apps** → **Custom App**
-2. Image: `ghcr.io/ryanattanagra/mediasage`, Tag: `latest`
+2. Image: `ghcr.io/ecwilsonaz/mediasage`, Tag: `latest`
 3. Port: 5765
 4. Storage: a host path or volume mounted at `/app/data` (settings and the library cache live here)
 5. Start it, open port 5765 and complete the setup wizard
@@ -248,7 +246,7 @@ requires repository-owner review even when the XML is already present.
 ```yaml
 services:
   mediasage:
-    image: ghcr.io/ryanattanagra/mediasage:latest
+    image: ghcr.io/ecwilsonaz/mediasage:latest
     ports:
       - "5765:5765"
     volumes:
@@ -263,7 +261,7 @@ services:
 Docker isn't required. MediaSage is Python + FastAPI with no native dependencies, so it runs on any machine with Python 3.11+ — including ARM-based Synology NAS models, Raspberry Pis, or any Linux/macOS/Windows box.
 
 ```bash
-git clone https://github.com/RyanAtTanagra/mediasage.git
+git clone https://github.com/ecwilsonaz/mediasage.git
 cd mediasage
 python -m venv venv
 source venv/bin/activate
@@ -478,7 +476,7 @@ This ensures every track exists in your library while keeping API costs manageab
 ### Local Setup
 
 ```bash
-git clone https://github.com/RyanAtTanagra/mediasage.git
+git clone https://github.com/ecwilsonaz/mediasage.git
 cd mediasage
 python -m venv venv
 source venv/bin/activate

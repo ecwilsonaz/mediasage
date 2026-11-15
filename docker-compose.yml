@@ -1,6 +1,6 @@
 services:
   mediasage:
-    image: ghcr.io/ryanattanagra/mediasage:latest
+    image: ghcr.io/ecwilsonaz/mediasage:latest
     # To build locally instead, comment out 'image' and uncomment 'build':
     # build: .
     container_name: mediasage

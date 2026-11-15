@@ -116,7 +116,7 @@ docker/
 ```yaml
 services:
   mediasage:
-    image: ghcr.io/ryanattanagra/mediasage:latest
+    image: ghcr.io/ecwilsonaz/mediasage:latest
     container_name: mediasage
     user: "<UID>:<GID>"                            # Your Synology user and group ID
     ports:
@@ -149,7 +149,7 @@ See [Finding Your Synology User ID](#finding-your-synology-user-id) for UID/GID 
 ```yaml
 services:
   mediasage:
-    image: ghcr.io/ryanattanagra/mediasage:latest
+    image: ghcr.io/ecwilsonaz/mediasage:latest
     container_name: mediasage
     user: "1026:100"
     ports:
@@ -219,7 +219,7 @@ If you prefer the GUI to editing a compose file, use this method.
 1. Open **Container Manager**
 2. Go to **Registry** in the left sidebar
 3. The image is on GitHub's registry, not Docker Hub, so add it once: **Settings** → **Add**, name `GHCR`, URL `https://ghcr.io`, then select it and click **Use**
-4. In the search bar, type `ryanattanagra/mediasage` and click **Download**
+4. In the search bar, type `ecwilsonaz/mediasage` and click **Download**
 5. Choose the `latest` tag and click **Apply**
 6. Wait for the download to complete (check the **Image** section)
 
