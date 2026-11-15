@@ -151,6 +151,30 @@ def init_schema(conn: sqlite3.Connection) -> bool:
 
         CREATE INDEX IF NOT EXISTS idx_results_type_created ON results(type, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at DESC);
+
+        -- Scheduled playlist refreshes (backend/scheduler.py)
+        CREATE TABLE IF NOT EXISTS schedules (
+            id TEXT PRIMARY KEY,
+            playlist_id TEXT NOT NULL,
+            playlist_title TEXT NOT NULL,
+            server_id TEXT,
+            request JSON NOT NULL,
+            frequency TEXT NOT NULL,
+            weekday INTEGER NOT NULL,
+            hour INTEGER NOT NULL,
+            timezone TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            paused_reason TEXT,
+            next_run_at TEXT NOT NULL,
+            running_since TEXT,
+            last_run_at TEXT,
+            last_status TEXT,
+            last_error TEXT,
+            last_track_count INTEGER,
+            failures INTEGER NOT NULL DEFAULT 0,
+            cost_per_run REAL NOT NULL DEFAULT 0,
+            total_cost REAL NOT NULL DEFAULT 0
+        );
     """)
 
     # Migration: add parent_rating_key column if missing (for pre-existing databases)
@@ -181,6 +205,12 @@ def init_schema(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("ALTER TABLE results ADD COLUMN subtitle TEXT")
         logger.info("Migration applied: added subtitle column to results")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Generation parameters, for scheduled refreshes
+    try:
+        conn.execute("ALTER TABLE results ADD COLUMN request JSON")
     except sqlite3.OperationalError:
         pass  # Column already exists
 
@@ -1255,6 +1285,7 @@ def save_result(
     artist: str | None = None,
     art_rating_key: str | None = None,
     subtitle: str | None = None,
+    request: dict | None = None,
 ) -> str:
     """Save a generated result and return its unique ID.
 
@@ -1267,6 +1298,7 @@ def save_result(
         artist: Primary artist (for album recs)
         art_rating_key: Rating key for thumbnail art
         subtitle: Pre-computed subtitle for history feed cards
+        request: Generation parameters, for scheduled refreshes (prompt playlists only)
 
     Returns:
         16-char hex ID for the saved result
@@ -1278,9 +1310,13 @@ def save_result(
         for _ in range(10):
             result_id = secrets.token_hex(8)
             cursor = conn.execute(
-                """INSERT OR IGNORE INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (result_id, result_type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle),
+                """INSERT OR IGNORE INTO results
+                   (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, request)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result_id, result_type, title, prompt, json.dumps(snapshot), track_count, artist,
+                    art_rating_key, subtitle, json.dumps(request) if request else None,
+                ),
             )
             if cursor.rowcount > 0:
                 break
@@ -1302,7 +1338,8 @@ def get_result(result_id: str) -> dict[str, Any] | None:
     conn = ensure_db_initialized()
     try:
         row = conn.execute(
-            "SELECT id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, created_at FROM results WHERE id = ?",
+            "SELECT id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, created_at, request"
+            " FROM results WHERE id = ?",
             (result_id,),
         ).fetchone()
         if not row:
@@ -1318,6 +1355,7 @@ def get_result(result_id: str) -> dict[str, Any] | None:
             "art_rating_key": row["art_rating_key"],
             "subtitle": row["subtitle"],
             "created_at": row["created_at"],
+            "request": json.loads(row["request"]) if row["request"] else None,
         }
     finally:
         conn.close()

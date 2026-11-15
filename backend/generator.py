@@ -187,10 +187,12 @@ def generate_playlist_stream(
     max_tracks_to_ai: int = 500,
     artists: list[str] | None = None,
     exclude_artists: list[str] | None = None,
+    save_to_history: bool = True,
 ) -> Generator[str, None, None]:
     """Generate a playlist with streaming progress updates.
 
     Yields SSE-formatted events with progress updates and final result.
+    Scheduled refreshes pass save_to_history=False.
     """
     def emit(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -408,15 +410,30 @@ def generate_playlist_stream(
                 result_subtitle = f"{prompt} \u00b7 {len(matched_tracks)} tracks"
             else:
                 result_subtitle = f"{len(matched_tracks)} tracks"
-            result_id = library_cache.save_result(
-                result_type=result_type,
-                title=result_title,
-                prompt=prompt or "",
-                snapshot=result.model_dump(mode="json"),
-                track_count=len(matched_tracks),
-                art_rating_key=first_art_key,
-                subtitle=result_subtitle,
-            )
+            # GenerateRequest fields, kept so a prompt playlist can be regenerated on a schedule
+            request = None if seed_track else {
+                "prompt": prompt,
+                "refinement_answers": refinement_answers,
+                "genres": genres or [],
+                "decades": decades or [],
+                "artists": artists or [],
+                "exclude_artists": exclude_artists or [],
+                "track_count": track_count,
+                "exclude_live": exclude_live,
+                "min_rating": min_rating,
+                "max_tracks_to_ai": max_tracks_to_ai,
+            }
+            if save_to_history:
+                result_id = library_cache.save_result(
+                    result_type=result_type,
+                    title=result_title,
+                    prompt=prompt or "",
+                    snapshot=result.model_dump(mode="json"),
+                    track_count=len(matched_tracks),
+                    art_rating_key=first_art_key,
+                    subtitle=result_subtitle,
+                    request=request,
+                )
         except Exception as e:
             logger.warning("Failed to save result: %s", e)
 
@@ -432,6 +449,7 @@ def generate_playlist_stream(
         }
         if result_id:
             complete_data["result_id"] = result_id
+            complete_data["schedulable"] = not seed_track
         yield emit("complete", complete_data)
         logger.info("Complete event emitted successfully")
 

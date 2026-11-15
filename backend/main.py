@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from starlette.responses import StreamingResponse
@@ -71,6 +71,10 @@ from backend.models import (
     ResultListResponse,
     SavePlaylistRequest,
     SavePlaylistResponse,
+    ScheduleCreateRequest,
+    ScheduleInfo,
+    ScheduleListResponse,
+    ScheduleUpdateRequest,
     SetupCompleteResponse,
     SetupStatusResponse,
     SyncProgress,
@@ -89,7 +93,7 @@ from backend.models import (
 )
 from backend.plex_client import PlexClient as PlexClientInstance, get_plex_client, init_plex_client
 from backend.jellyfin_client import JellyfinClient, get_jellyfin_client, init_jellyfin_client
-from backend import library_cache
+from backend import library_cache, scheduler
 from backend.model_catalog import CATALOG_BY_ID, MODEL_CATALOG
 from backend.llm_client import (
     TOKENS_PER_ALBUM,
@@ -150,12 +154,14 @@ async def lifespan(app: FastAPI):
             _sync_if_due()   # empty / interrupted / migrated / stale cache -> sync on boot
 
     freshness_task = asyncio.create_task(_keep_library_fresh()) if LIBRARY_CHECK_INTERVAL > 0 else None
+    schedule_task = asyncio.create_task(_run_due_schedules())
 
     yield
 
     # Shutdown: clean up resources
     if freshness_task:
         freshness_task.cancel()
+    schedule_task.cancel()
     if _music_research_client is not None:
         await _music_research_client.close()
     if _art_proxy_client is not None:
@@ -258,6 +264,15 @@ async def _keep_library_fresh() -> None:
             _sync_if_due()
         except Exception:
             logger.exception("Library freshness check failed")
+
+
+async def _run_due_schedules() -> None:
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await asyncio.to_thread(scheduler.run_due)
+        except Exception:
+            logger.exception("Scheduled playlist check failed")
 
 
 def _resync_for_new_media_server() -> None:
@@ -1842,18 +1857,107 @@ async def get_result(result_id: str) -> ResultDetail:
     result = await asyncio.to_thread(library_cache.get_result, result_id)
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
-    return ResultDetail(**result)
+    return ResultDetail(**result, schedulable=bool(result.get("request")))
 
 
-@app.delete("/api/results/{result_id}", status_code=204)
-async def delete_result(result_id: str):
-    """Delete a saved result."""
-    if not _RESULT_ID_RE.match(result_id):
-        raise HTTPException(status_code=400, detail="Invalid result ID format")
-    deleted = await asyncio.to_thread(library_cache.delete_result, result_id)
-    if not deleted:
+# =============================================================================
+# Scheduled Playlist Refresh
+# =============================================================================
+
+
+@app.get("/api/schedules", response_model=ScheduleListResponse)
+async def list_schedules() -> ScheduleListResponse:
+    """List scheduled playlist refreshes with their last result and estimated cost."""
+    schedules = await asyncio.to_thread(scheduler.list_schedules)
+    return ScheduleListResponse(
+        schedules=schedules,
+        paid_provider=scheduler.is_paid_provider(),
+        cost_per_month=sum(s["cost_per_month"] for s in schedules if s["enabled"]),
+    )
+
+
+@app.post("/api/schedules", response_model=ScheduleInfo)
+async def create_schedule(request: ScheduleCreateRequest) -> ScheduleInfo:
+    """Regenerate a saved playlist daily or weekly, replacing its tracks each time.
+
+    A playlist has one schedule; scheduling it again replaces the previous one.
+    """
+    result = await asyncio.to_thread(library_cache.get_result, request.result_id)
+    if not result:
         raise HTTPException(status_code=404, detail="Result not found")
+    if not result.get("request"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only playlists made from a prompt, generated since scheduling was added, can be scheduled.",
+        )
+    if scheduler.is_paid_provider() and not request.confirm_cost:
+        raise HTTPException(
+            status_code=400,
+            detail="Each scheduled run is charged by your AI provider. Set confirm_cost to accept that.",
+        )
+
+    media_client = get_current_media_client()
+    if not media_client or not media_client.is_connected():
+        raise HTTPException(status_code=503, detail="Media server not connected")
+    playlists = await asyncio.to_thread(media_client.get_playlists)
+    playlist = next((p for p in playlists if p.rating_key == request.playlist_id), None)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found on the media server")
+
+    return await asyncio.to_thread(
+        lambda: scheduler.create_schedule(
+            playlist_id=playlist.rating_key,
+            playlist_title=playlist.title,
+            server_id=media_client.get_machine_identifier(),
+            request=result["request"],
+            frequency=request.frequency,
+            hour=request.hour,
+            weekday=request.weekday,
+            tz_name=request.timezone,
+            cost_per_run=result["snapshot"].get("estimated_cost") or 0.0,
+        )
+    )
+
+
+@app.patch("/api/schedules/{schedule_id}", response_model=ScheduleInfo)
+async def update_schedule(schedule_id: str, request: ScheduleUpdateRequest) -> ScheduleInfo:
+    """Pause or resume a schedule, or change when it runs."""
+    schedule = await asyncio.to_thread(
+        lambda: scheduler.update_schedule(
+            schedule_id,
+            enabled=request.enabled,
+            frequency=request.frequency,
+            hour=request.hour,
+            weekday=request.weekday,
+            tz_name=request.timezone,
+        )
+    )
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return schedule
+
+
+@app.delete("/api/schedules/{schedule_id}", status_code=204)
+async def delete_schedule(schedule_id: str):
+    """Stop refreshing a playlist. The playlist itself is left as it is."""
+    if not await asyncio.to_thread(scheduler.delete_schedule, schedule_id):
+        raise HTTPException(status_code=404, detail="Schedule not found")
     return Response(status_code=204)
+
+
+@app.post("/api/schedules/{schedule_id}/run", response_model=ScheduleInfo, status_code=202)
+async def run_schedule_now(schedule_id: str, background_tasks: BackgroundTasks) -> ScheduleInfo:
+    """Refresh a scheduled playlist now, in the background. Poll GET /api/schedules for the outcome."""
+    schedule = await asyncio.to_thread(scheduler.get_schedule, schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    if library_cache.get_sync_progress()["is_syncing"]:
+        raise HTTPException(status_code=409, detail="Library sync in progress. Try again when it finishes.")
+    # Claimed here, not in the background task, so the schedule shows as running straight away
+    if not await asyncio.to_thread(scheduler.claim, schedule_id):
+        raise HTTPException(status_code=409, detail="This playlist is being refreshed right now")
+    background_tasks.add_task(scheduler.run_schedule, schedule_id)
+    return {**schedule, "is_running": True}
 
 
 # =============================================================================

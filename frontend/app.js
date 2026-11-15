@@ -105,6 +105,14 @@ const state = {
     tokenCount: 0,
     estimatedCost: 0,
 
+    // Scheduled refresh
+    resultId: null,            // Saved result behind the playlist on screen
+    schedulable: false,        // Whether that result can be scheduled
+    generationCost: 0,         // What one scheduled run of it would cost
+    schedulePlaylistId: null,  // Playlist the schedule dialog is for
+    scheduleEditing: null,     // Schedule being edited in the dialog (null when creating one)
+    schedules: null,           // Last /api/schedules response
+
     // Curator narrative
     playlistTitle: '',      // Generated title with date
     narrative: '',          // 2-3 sentence curator note
@@ -619,6 +627,7 @@ function navigateTo(view, mode) {
     }
     if (view === 'settings') {
         loadSettings();
+        loadSchedules();
     } else if (view === 'recommend') {
         initRecommendView();
     } else if (view === 'home') {
@@ -658,6 +667,9 @@ async function loadSavedResult(resultId) {
             state.playlistName = snapshot.playlist_title || data.title;
             state.tokenCount = snapshot.token_count || 0;
             state.estimatedCost = snapshot.estimated_cost || 0;
+            state.resultId = data.id;
+            state.schedulable = !!data.schedulable;
+            state.generationCost = snapshot.estimated_cost || 0;
             state.selectedTrackKey = null;
 
             updateView();
@@ -2378,7 +2390,8 @@ function hideSuccess() {
     document.getElementById('success-toast').classList.add('hidden');
 }
 
-function showSuccessModal(name, trackCount, playlistUrl) {
+function showSuccessModal(name, trackCount, playlistUrl, playlistId = null) {
+    offerSchedule('schedule-after-save-btn', playlistId, name);
     const modal = document.getElementById('success-modal');
     const summary = document.getElementById('success-modal-summary');
     const openBtn = document.getElementById('open-in-plex-btn');
@@ -2422,6 +2435,9 @@ function resetPlaylistState() {
     state.estimatedCost = 0;
     state.sessionTokens = 0;
     state.sessionCost = 0;
+    state.resultId = null;
+    state.schedulable = false;
+    state.generationCost = 0;
     state.playlistTitle = '';
     state.narrative = '';
     state.trackReasons = {};
@@ -3021,6 +3037,8 @@ function setupEventListeners() {
     // Update success modal — Start New Playlist
     document.getElementById('update-new-playlist-btn').addEventListener('click', handleUpdateSuccessNewPlaylist);
 
+    setupScheduleEventListeners();
+
     // Bottom sheet close handlers
     const bottomSheet = document.getElementById('bottom-sheet');
     if (bottomSheet) {
@@ -3343,6 +3361,9 @@ async function handleGenerate() {
             state.playlist = response.tracks;
             state.tokenCount = state.sessionTokens;
             state.estimatedCost = state.sessionCost;
+            state.resultId = response.result_id || null;
+            state.schedulable = !!response.schedulable;
+            state.generationCost = response.estimated_cost || 0;
 
             // Use generated title from response, or from state if already set via SSE
             if (response.playlist_title) {
@@ -3424,7 +3445,7 @@ async function handleSavePlaylist() {
 
         if (response.success) {
             const trackCount = response.tracks_added || state.playlist.length;
-            showSuccessModal(name, trackCount, response.playlist_url);
+            showSuccessModal(name, trackCount, response.playlist_url, response.playlist_id);
             // Invalidate playlist cache so newly created playlist shows in Update Existing picker
             state.plexPlaylists = [];
         } else {
@@ -3804,6 +3825,281 @@ function toggleSaveModeDropdown() {
 }
 
 // =============================================================================
+// Scheduled Playlist Refresh
+// =============================================================================
+
+const SCHEDULE_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const SCHEDULE_RUNS_PER_MONTH = { daily: 365 / 12, weekly: 52 / 12 };
+let _schedulePollTimer = null;
+let _scheduleConfirm = null; // { key, el, label, timeout } — button waiting for its second click
+
+function browserTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+        return 'UTC';
+    }
+}
+
+function formatHour(hour) {
+    return new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatMoney(amount) {
+    return amount > 0 && amount < 0.01 ? 'less than $0.01' : `$${amount.toFixed(2)}`;
+}
+
+function describeSchedule(schedule) {
+    const when = schedule.frequency === 'weekly'
+        ? `Every ${SCHEDULE_WEEKDAYS[schedule.weekday]}`
+        : 'Every day';
+    const zone = schedule.timezone === browserTimezone() ? '' : ` (${schedule.timezone})`;
+    return `${when} at ${formatHour(schedule.hour)}${zone}`;
+}
+
+/** Show a success modal's schedule button if the playlist just saved can be scheduled. */
+function offerSchedule(buttonId, playlistId, title) {
+    const btn = document.getElementById(buttonId);
+    const offered = !!(playlistId && state.schedulable);
+    btn.classList.toggle('hidden', !offered);
+    btn.dataset.playlistId = offered ? playlistId : '';
+    btn.dataset.title = offered ? title : '';
+}
+
+function updateScheduleCost() {
+    const frequency = document.getElementById('schedule-frequency').value;
+    const costEl = document.getElementById('schedule-cost');
+    const paid = !state.config?.is_local_provider;
+
+    document.getElementById('schedule-weekday-group').classList.toggle('hidden', frequency !== 'weekly');
+    costEl.classList.toggle('schedule-cost--free', !paid);
+    document.getElementById('schedule-confirm-label').classList.toggle('hidden', !paid);
+    if (paid) {
+        const perRun = state.scheduleEditing ? state.scheduleEditing.cost_per_run : state.generationCost;
+        const perMonth = perRun * SCHEDULE_RUNS_PER_MONTH[frequency];
+        costEl.innerHTML = `Every refresh calls your AI provider and is billed like a new playlist: <strong>${formatMoney(perRun)}</strong> per refresh, <strong>${formatMoney(perMonth)} a month</strong> on this schedule. It keeps running until you pause or delete it in Settings.`;
+    } else {
+        costEl.textContent = 'Refreshes run on your local model, so they cost nothing.';
+    }
+    document.getElementById('schedule-save-btn').disabled =
+        paid && !document.getElementById('schedule-confirm-cost').checked;
+}
+
+/** Open the dialog to schedule a playlist, or, given its schedule, to change when it runs. */
+function openScheduleModal(playlistId, title, schedule = null) {
+    state.schedulePlaylistId = playlistId;
+    state.scheduleEditing = schedule;
+    document.getElementById('schedule-modal-title').textContent =
+        schedule ? 'Edit schedule' : 'Schedule automatic refreshes';
+    document.getElementById('schedule-save-btn').textContent = schedule ? 'Save' : 'Schedule';
+    document.getElementById('schedule-modal-description').textContent =
+        `MediaSage will build "${title}" again from the same request and filters, and replace its tracks with the new picks.`;
+    document.getElementById('schedule-timezone').textContent = `Times are in your timezone (${browserTimezone()}).`;
+    document.getElementById('schedule-frequency').value = schedule?.frequency ?? 'daily';
+    document.getElementById('schedule-weekday').value = String(schedule?.weekday ?? 0);
+    document.getElementById('schedule-hour').value = String(schedule?.hour ?? 6);
+    document.getElementById('schedule-confirm-cost').checked = false;
+    updateScheduleCost();
+
+    const modal = document.getElementById('schedule-modal');
+    modal.classList.remove('hidden');
+    lockScroll();
+    focusManager.openModal(modal);
+}
+
+function dismissScheduleModal() {
+    dismissModal('schedule-modal');
+}
+
+async function handleScheduleSave() {
+    document.getElementById('schedule-save-btn').disabled = true;
+    const editing = state.scheduleEditing;
+    const timing = {
+        frequency: document.getElementById('schedule-frequency').value,
+        weekday: Number(document.getElementById('schedule-weekday').value),
+        hour: Number(document.getElementById('schedule-hour').value),
+        timezone: browserTimezone(),
+    };
+    try {
+        const schedule = editing
+            ? await apiCall(`/schedules/${editing.id}`, { method: 'PATCH', body: JSON.stringify(timing) })
+            : await apiCall('/schedules', {
+                method: 'POST',
+                body: JSON.stringify({
+                    ...timing,
+                    result_id: state.resultId,
+                    playlist_id: state.schedulePlaylistId,
+                    confirm_cost: document.getElementById('schedule-confirm-cost').checked,
+                }),
+            });
+        dismissScheduleModal();
+        const when = describeSchedule(schedule);
+        showSuccess(`"${schedule.playlist_title}" will refresh ${when[0].toLowerCase()}${when.slice(1)}.${editing ? '' : ' Manage it in Settings.'}`);
+        if (editing) loadSchedules();
+    } catch (error) {
+        showError(error.message);
+        updateScheduleCost();
+    }
+}
+
+function scheduleStatusLines(schedule) {
+    const lines = [`<div class="schedule-item-line">${escapeHtml(describeSchedule(schedule))}</div>`];
+    if (schedule.prompt) {
+        lines.push(`<div class="schedule-item-line">Request: ${escapeHtml(schedule.prompt)}</div>`);
+    }
+    if (schedule.is_running) {
+        lines.push('<div class="schedule-item-line">Refreshing now&hellip;</div>');
+    } else if (!schedule.enabled) {
+        lines.push(`<div class="schedule-item-line schedule-item-line--paused">${escapeHtml(schedule.paused_reason || 'Paused')}</div>`);
+    } else {
+        lines.push(`<div class="schedule-item-line">Next refresh: ${escapeHtml(new Date(schedule.next_run_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }))}</div>`);
+    }
+    if (schedule.last_run_at) {
+        const when = relativeTime(schedule.last_run_at);
+        if (schedule.last_status === 'ok') {
+            const cost = state.schedules?.paid_provider ? ` · ${formatMoney(schedule.cost_per_run)}` : '';
+            lines.push(`<div class="schedule-item-line">Last refresh: ${escapeHtml(when)} · ${schedule.last_track_count} tracks${cost}</div>`);
+        } else {
+            const label = schedule.last_status === 'skipped' ? 'Skipped' : 'Failed';
+            lines.push(`<div class="schedule-item-line schedule-item-line--error">${label} ${escapeHtml(when)}: ${escapeHtml(schedule.last_error || 'Unknown error')}</div>`);
+        }
+    }
+    return lines.join('');
+}
+
+function renderSchedules() {
+    const data = state.schedules;
+    const list = document.getElementById('schedules-list');
+    const summary = document.getElementById('schedules-summary');
+    if (!data) return;
+
+    if (!data.schedules.length) {
+        summary.textContent = 'No playlists are scheduled. Save a playlist made from a prompt, then choose "Schedule automatic refreshes".';
+        list.innerHTML = '';
+        return;
+    }
+
+    const active = data.schedules.filter(s => s.enabled).length;
+    const spent = data.schedules.reduce((sum, s) => sum + s.total_cost, 0);
+    summary.textContent = data.paid_provider
+        ? `${active} active. Estimated ${formatMoney(data.cost_per_month)} a month at current prices; ${formatMoney(spent)} spent on scheduled refreshes so far.`
+        : `${active} active. Refreshes run on your local model at no cost.`;
+
+    list.innerHTML = data.schedules.map(schedule => {
+        const runLabel = data.paid_provider && schedule.cost_per_run > 0
+            ? `Run now (${formatMoney(schedule.cost_per_run)})`
+            : 'Run now';
+        return `
+            <div class="schedule-item" data-schedule-id="${escapeHtml(schedule.id)}">
+                <div class="schedule-item-info">
+                    <div class="schedule-item-title">${escapeHtml(schedule.playlist_title)}</div>
+                    ${scheduleStatusLines(schedule)}
+                </div>
+                <div class="schedule-item-actions">
+                    <button class="btn btn-secondary btn-sm" data-action="edit">Edit</button>
+                    <button class="btn btn-secondary btn-sm" data-action="toggle">${schedule.enabled ? 'Pause' : 'Resume'}</button>
+                    <button class="btn btn-secondary btn-sm" data-action="run" ${schedule.is_running ? 'disabled' : ''}>${escapeHtml(runLabel)}</button>
+                    <button class="btn btn-secondary btn-sm" data-action="delete">Delete</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+async function loadSchedules() {
+    clearTimeout(_schedulePollTimer);
+    try {
+        state.schedules = await apiCall('/schedules');
+    } catch (error) {
+        document.getElementById('schedules-summary').textContent = 'Could not load schedules: ' + error.message;
+        return;
+    }
+    resetScheduleConfirm();
+    renderSchedules();
+    // Follow a running refresh until it finishes
+    if (state.view === 'settings' && state.schedules.schedules.some(s => s.is_running)) {
+        _schedulePollTimer = setTimeout(loadSchedules, 5000);
+    }
+}
+
+function resetScheduleConfirm() {
+    if (!_scheduleConfirm) return;
+    clearTimeout(_scheduleConfirm.timeout);
+    _scheduleConfirm.el.classList.remove('confirming');
+    _scheduleConfirm.el.textContent = _scheduleConfirm.label;
+    _scheduleConfirm = null;
+}
+
+/** Two-step confirm: the first click arms the button, a second within 4 seconds returns true. */
+function confirmScheduleAction(key, btn, prompt) {
+    if (_scheduleConfirm && _scheduleConfirm.key === key) {
+        resetScheduleConfirm();
+        return true;
+    }
+    resetScheduleConfirm();
+    _scheduleConfirm = { key, el: btn, label: btn.textContent, timeout: setTimeout(resetScheduleConfirm, 4000) };
+    btn.classList.add('confirming');
+    btn.textContent = prompt;
+    return false;
+}
+
+async function handleScheduleAction(scheduleId, action, btn) {
+    const schedule = state.schedules?.schedules.find(s => s.id === scheduleId);
+    if (!schedule) return;
+    if (action === 'edit') {
+        openScheduleModal(schedule.playlist_id, schedule.playlist_title, schedule);
+        return;
+    }
+    try {
+        if (action === 'toggle') {
+            await apiCall(`/schedules/${scheduleId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ enabled: !schedule.enabled }),
+            });
+        } else if (action === 'run') {
+            // Only a run that costs money needs confirming
+            const paid = state.schedules.paid_provider;
+            if (paid && !confirmScheduleAction(`run:${scheduleId}`, btn, 'Confirm run')) return;
+            await apiCall(`/schedules/${scheduleId}/run`, { method: 'POST' });
+        } else if (action === 'delete') {
+            if (!confirmScheduleAction(`delete:${scheduleId}`, btn, 'Delete?')) return;
+            // Not apiCall: there is no response body
+            const response = await fetch(`/api/schedules/${scheduleId}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error('Failed to delete schedule');
+        }
+    } catch (error) {
+        showError(error.message);
+    }
+    loadSchedules();
+}
+
+function setupScheduleEventListeners() {
+    const weekdaySelect = document.getElementById('schedule-weekday');
+    SCHEDULE_WEEKDAYS.forEach((day, i) => weekdaySelect.add(new Option(day, String(i))));
+    const hourSelect = document.getElementById('schedule-hour');
+    for (let hour = 0; hour < 24; hour++) hourSelect.add(new Option(formatHour(hour), String(hour)));
+
+    document.getElementById('schedule-frequency').addEventListener('change', updateScheduleCost);
+    document.getElementById('schedule-confirm-cost').addEventListener('change', updateScheduleCost);
+    document.getElementById('schedule-save-btn').addEventListener('click', handleScheduleSave);
+
+    // The schedule buttons in the two save-success modals
+    const closers = { 'schedule-after-save-btn': dismissSuccessModal, 'schedule-after-update-btn': dismissUpdateSuccess };
+    for (const [buttonId, close] of Object.entries(closers)) {
+        document.getElementById(buttonId).addEventListener('click', (e) => {
+            const { playlistId, title } = e.currentTarget.dataset;
+            close();
+            openScheduleModal(playlistId, title);
+        });
+    }
+
+    document.getElementById('schedules-list').addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action]');
+        const item = e.target.closest('.schedule-item');
+        if (btn && item) handleScheduleAction(item.dataset.scheduleId, btn.dataset.action, btn);
+    });
+}
+
+// =============================================================================
 // Instant Queue — Update Existing Handlers (005)
 // =============================================================================
 
@@ -3934,6 +4230,9 @@ async function handleUpdatePlaylist() {
             }
 
             document.getElementById('update-success-message').textContent = message;
+            // Appending doesn't make the playlist this result, and "Now Playing" has no ID yet
+            const canSchedule = state.saveMode === 'replace' && playlistId !== '__scratch__';
+            offerSchedule('schedule-after-update-btn', canSchedule ? playlistId : null, playlistTitle);
 
             const openBtn = document.getElementById('update-open-in-plex-btn');
             if (response.playlist_url) {

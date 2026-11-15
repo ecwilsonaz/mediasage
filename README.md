@@ -152,6 +152,18 @@ Estimated cost displays before you generate. MediaSage auto-detects your provide
 - Rename the playlist
 - See actual token usage and cost
 
+### Scheduled Refresh
+
+- After saving a playlist made from a prompt, choose **Schedule automatic refreshes** to have MediaSage regenerate it every day or every week at a set hour, replacing its tracks with new picks from the same request and filters
+- **Every refresh calls your AI provider and costs what generating the playlist cost.** The dialog shows the cost per refresh and per month before you confirm; local models (Ollama, custom) cost nothing
+- Manage schedules under **Settings → Scheduled Playlists**: edit, pause, resume, run now, delete, and see the last result, the next run and the total spent
+- A schedule pauses itself after 3 failed runs in a row, and a failed run waits for its next slot instead of retrying
+- Runs missed while MediaSage was stopped happen once when it starts again
+- Refreshes don't appear in the history; on Plex the playlist's description is updated with the new curator note (Jellyfin playlists have no description)
+- Playlists made from a seed track can't be scheduled yet
+
+MediaSage has no login, so anyone who can reach it can create a schedule that spends your AI credit. Keep it on a trusted network.
+
 ---
 
 ## Installation
@@ -535,6 +547,9 @@ Interactive documentation available at `/docs` when running.
 | `/api/recommend/switch-mode` | POST | Switch library/discovery mode |
 | `/api/results` | GET | List saved result history |
 | `/api/results/{id}` | GET/DELETE | Get or delete a saved result |
+| `/api/schedules` | GET/POST | List scheduled playlist refreshes, or schedule one (`result_id`, `playlist_id`, `frequency` daily/weekly, `hour`, `weekday`, `timezone`, `confirm_cost`) |
+| `/api/schedules/{id}` | PATCH/DELETE | Pause or resume a schedule (`enabled`), change when it runs (`frequency`, `hour`, `weekday`, `timezone`), or delete it |
+| `/api/schedules/{id}/run` | POST | Refresh a scheduled playlist now |
 | `/api/plex/clients` | GET | List active Plex clients |
 | `/api/plex/playlists` | GET | List existing Plex playlists |
 | `/api/jellyfin/playlists` | GET | List existing Jellyfin playlists |
