@@ -336,6 +336,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         library_sync_hours=float(
             get_env_or_yaml("LIBRARY_SYNC_HOURS", yaml_config.get("library_sync_hours"), 24)
         ),
+        genre_grouping=bool(yaml_config.get("genre_grouping", False)),
     )
 
 
@@ -436,6 +437,7 @@ def update_config_values(updates: dict[str, Any]) -> AppConfig:
     )
 
     library_sync_hours = updates.get("library_sync_hours")  # 0 (off) is a real value
+    genre_grouping = updates.get("genre_grouping")  # False (off) is a real value
     _config = AppConfig(
         media_server=media_server or _config.media_server,
         plex=new_plex,
@@ -443,6 +445,7 @@ def update_config_values(updates: dict[str, Any]) -> AppConfig:
         llm=new_llm,
         defaults=_config.defaults,
         library_sync_hours=_config.library_sync_hours if library_sync_hours is None else library_sync_hours,
+        genre_grouping=_config.genre_grouping if genre_grouping is None else genre_grouping,
     )
 
     # Persist to user config file
@@ -451,6 +454,8 @@ def update_config_values(updates: dict[str, Any]) -> AppConfig:
         user_updates["media_server"] = media_server
     if library_sync_hours is not None:
         user_updates["library_sync_hours"] = library_sync_hours
+    if genre_grouping is not None:
+        user_updates["genre_grouping"] = genre_grouping
     if plex_updates:
         user_updates["plex"] = plex_updates
     if jellyfin_updates:

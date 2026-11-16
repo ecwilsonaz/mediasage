@@ -750,6 +750,39 @@ class TestLibrarySyncHours:
         assert saved["library_sync_hours"] == 0
 
 
+class TestGenreGroupingSetting:
+    def _config(self, monkeypatch, **fields):
+        current = config_module.AppConfig(
+            plex=config_module.PlexConfig(url="", token=""),
+            llm=config_module.LLMConfig(provider="gemini", model_analysis="m", model_generation="m"),
+            **fields,
+        )
+        monkeypatch.setattr(config_module, "_config", current)
+        saved = {}
+        monkeypatch.setattr(config_module, "save_user_config", saved.update)
+        return saved
+
+    def test_off_by_default_and_loaded_from_settings(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("")
+        with patch("backend.config.load_user_yaml_config", return_value={}):
+            assert load_config(config_file).genre_grouping is False
+        with patch("backend.config.load_user_yaml_config", return_value={"genre_grouping": True}):
+            assert load_config(config_file).genre_grouping is True
+
+    def test_turning_on_and_off_is_saved(self, monkeypatch):
+        saved = self._config(monkeypatch)
+        assert config_module.update_config_values({"genre_grouping": True}).genre_grouping is True
+        assert saved["genre_grouping"] is True
+        assert config_module.update_config_values({"genre_grouping": False}).genre_grouping is False
+        assert saved["genre_grouping"] is False
+
+    def test_other_updates_leave_it_alone(self, monkeypatch):
+        saved = self._config(monkeypatch, genre_grouping=True)
+        assert config_module.update_config_values({"library_sync_hours": 6}).genre_grouping is True
+        assert "genre_grouping" not in saved
+
+
 class TestEnvApiKeyNotSaved:
     """A provider's API key from the environment is used but never written to config.user.yaml."""
 

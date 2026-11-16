@@ -108,7 +108,21 @@ Before the AI sees anything, you control the pool:
 - **Minimum rating** — Only tracks rated 3+, 4+, etc. (Plex only; Jellyfin has no star ratings)
 - **Exclude live versions** — Skip concert recordings automatically
 
-Real-time track counts show exactly how your filters narrow results.
+Real-time track counts show exactly how your filters narrow results. Your last genre selection is remembered and used as the starting point whenever the AI has no suggestion of its own.
+
+Genre tags that hold several genres in one string ("Rock; Pop") are split on `;` and `,` when the library is synced.
+
+### Smart Genre Grouping
+
+Libraries tagged from several sources can end up with hundreds of genre tags: "Hip-Hop", "Hip Hop" and "Rap/Hip-Hop" side by side, plus things that aren't genres at all ("seen live", "melancholy"). Turn on **Settings → Smart Genre Grouping** and your AI provider sorts the tags into a short list of groups.
+
+- **Off by default.** Settings shows what grouping your library would cost before you turn it on. A Jellyfin library with 200 tags took about 4,500 tokens, under a cent on Gemini 3.8 Flash, and 20 seconds
+- **The genre filter gets a grouped view**: one chip per group, which you can expand to pick individual tags. "All tags" switches back to the raw list. Selecting a group selects the tags in it; filtering always works on your original tags, and nothing is changed on your media server
+- **Non-genre tags** and **Untagged** tracks are listed separately and left out unless you select them
+- **Prompt analysis picks from the groups**, so "mellow jazz" finds every spelling of your jazz tags
+- **Later syncs are cheap**: nothing is sent when the tag list hasn't changed, and otherwise only the new tags are, so existing groups stay put. If more than 30% of the tags are new, everything is regrouped
+- **Regenerate Genre Groups** in Settings regroups everything from scratch; existing groups may change
+- If the AI call fails, or no provider is configured, the previous groups (or the plain tag list) keep working
 
 ### Local Library Cache
 
@@ -540,7 +554,9 @@ Interactive documentation available at `/docs` when running.
 | `/api/generate/stream` | POST | Stream playlist generation (SSE) |
 | `/api/playlist` | POST | Save playlist to Plex or Jellyfin |
 | `/api/playlist/update` | POST | Replace or append to a playlist |
-| `/api/recommend/albums/preview` | GET | Preview album candidates for filters |
+| `/api/recommend/albums/preview` | GET/POST | Preview album candidates for filters |
+| `/api/genres/groups` | GET | Smart genre groups, non-genre tags, untagged count, last run and cost estimate |
+| `/api/genres/groups/regenerate` | POST | Regroup every genre tag from scratch |
 | `/api/recommend/analyze-prompt` | POST | Analyze prompt for genre/decade filters |
 | `/api/recommend/questions` | POST | Generate clarifying questions |
 | `/api/recommend/generate` | POST | Generate album recommendations |

@@ -3783,3 +3783,101 @@ body.no-scroll {
         justify-content: flex-start;
     }
 }
+
+
+/* Smart genre grouping: filter panel */
+.genre-view-switch {
+    display: flex;
+    flex-basis: 100%;
+    gap: var(--spacing-xs);
+}
+
+.genre-view-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    padding: var(--spacing-xs) var(--spacing-md);
+    cursor: pointer;
+}
+
+.genre-view-btn.active {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.chip-group {
+    display: inline-flex;
+}
+
+.chip-group .chip-group-main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-right: var(--spacing-sm);
+}
+
+.chip-group .chip-expand {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-left-color: var(--bg-primary);
+    padding: var(--spacing-xs) var(--spacing-sm);
+}
+
+/* Some, but not all, of a group's tags are selected */
+.chip.partial {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.chip-group .chip-expand.partial {
+    border-left-color: var(--bg-primary);
+}
+
+.chip-group-members {
+    display: flex;
+    flex-wrap: wrap;
+    flex-basis: 100%;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-left: 2px solid var(--border);
+}
+
+.genre-extras {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    flex-basis: 100%;
+    gap: var(--spacing-md);
+    margin-top: var(--spacing-xs);
+}
+
+.genre-extras:empty {
+    display: none;
+}
+
+.genre-extras-toggle {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    padding: 0;
+}
+
+.genre-extras-toggle:hover {
+    color: var(--text-primary);
+}
+
+/* Smart genre grouping: Settings */
+#genre-grouping-section .checkbox-label {
+    margin: var(--spacing-md) 0 var(--spacing-sm);
+}
+
+#genre-grouping-section .btn {
+    margin-top: var(--spacing-sm);
+}
+
+.genre-grouping-error {
+    color: var(--error);
+}

@@ -870,6 +870,19 @@
                     </button>
                 </div>
 
+                <section class="settings-section" id="genre-grouping-section">
+                    <h3>Smart Genre Grouping</h3>
+                    <p class="filter-hint">For libraries with hundreds of inconsistent genre tags. Your AI provider sorts the tags into a short list of groups ("Hip-Hop", "Hip Hop" and "Rap/Hip-Hop" become one), which the genre filter and prompt analysis then use. Your original tags stay as they are, in MediaSage and on your media server.</p>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="genre-grouping-toggle">
+                        <span>Group genre tags with AI</span>
+                    </label>
+                    <p id="genre-grouping-estimate" class="filter-hint"></p>
+                    <p id="genre-grouping-status" class="filter-hint"></p>
+                    <button id="genre-regenerate-btn" class="btn btn-secondary btn-sm hidden">Regenerate Genre Groups</button>
+                    <p id="genre-regenerate-hint" class="filter-hint hidden">Regenerating re-analyzes every genre tag from scratch, so existing groups may change.</p>
+                </section>
+
                 <section class="settings-section" id="schedules-section">
                     <h3>Scheduled Playlists</h3>
                     <p id="schedules-summary" class="schedules-summary"></p>

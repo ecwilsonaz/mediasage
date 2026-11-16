@@ -103,14 +103,14 @@ class LLMClient:
         # Note: Ollama uses httpx directly, no persistent client needed
 
     def _complete_anthropic(
-        self, prompt: str, system: str, model: str
+        self, prompt: str, system: str, model: str, effort: str | None = None
     ) -> LLMResponse:
         """Make a completion request to Anthropic."""
         logger.info("Calling Anthropic API with %d char prompt", len(prompt))
         kwargs: dict[str, Any] = {}
         entry = CATALOG_BY_ID.get(model)
         if entry and entry.effort:
-            kwargs["output_config"] = {"effort": entry.effort}
+            kwargs["output_config"] = {"effort": effort or entry.effort}
         response = self._client.messages.create(
             model=model,
             max_tokens=16000,  # Includes thinking tokens on models that think
@@ -133,7 +133,7 @@ class LLMClient:
         )
 
     def _complete_openai(
-        self, prompt: str, system: str, model: str
+        self, prompt: str, system: str, model: str, effort: str | None = None
     ) -> LLMResponse:
         """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
         logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
@@ -143,7 +143,7 @@ class LLMClient:
             kwargs["max_completion_tokens"] = 16000
             entry = CATALOG_BY_ID.get(model)
             if entry and entry.effort:
-                kwargs["reasoning_effort"] = entry.effort
+                kwargs["reasoning_effort"] = effort or entry.effort
         else:
             kwargs["max_tokens"] = 8192
         response = self._client.chat.completions.create(
@@ -168,7 +168,7 @@ class LLMClient:
         )
 
     def _complete_gemini(
-        self, prompt: str, system: str, model: str, max_retries: int = 3
+        self, prompt: str, system: str, model: str, effort: str | None = None, max_retries: int = 3
     ) -> LLMResponse:
         """Make a completion request to Google Gemini with retry logic.
 
@@ -177,6 +177,11 @@ class LLMClient:
         truncation (MAX_TOKENS finish reason) or empty responses.
         """
         last_error = None
+        # Gemini 3 models think at length by default; 2.x models take a token budget instead of a level
+        version = re.match(r"gemini-(\d+)", model)
+        thinking = (
+            genai_types.ThinkingConfig(thinking_level=effort) if effort and version and int(version[1]) >= 3 else None
+        )
 
         for attempt in range(max_retries):
             logger.info("Calling Gemini API (attempt %d/%d) with %d char prompt",
@@ -187,6 +192,7 @@ class LLMClient:
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     system_instruction=system,
+                    thinking_config=thinking,
                     # Don't set max_output_tokens - let the model use what it needs
                     # This avoids truncation from thinking token consumption
                 ),
@@ -228,7 +234,7 @@ class LLMClient:
         # All retries exhausted
         raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {last_error}")
 
-    def _complete_ollama(self, prompt: str, system: str, model: str) -> LLMResponse:
+    def _complete_ollama(self, prompt: str, system: str, model: str, effort: str | None = None) -> LLMResponse:
         """Make a completion request to Ollama.
 
         Args:
@@ -283,8 +289,11 @@ class LLMClient:
             model=model,
         )
 
-    def _complete(self, prompt: str, system: str, model: str) -> LLMResponse:
-        """Make a completion request to the configured provider."""
+    def _complete(self, prompt: str, system: str, model: str, effort: str | None = None) -> LLMResponse:
+        """Make a completion request to the configured provider.
+
+        effort ("low", "medium", "high") overrides the model's reasoning effort where the model supports one.
+        """
         complete = {
             "anthropic": self._complete_anthropic,
             "openai": self._complete_openai,
@@ -302,7 +311,7 @@ class LLMClient:
             raise RuntimeError(f"No API key is set for {cloud_names[self.provider]}. Add one in Settings.")
 
         try:
-            response = complete(prompt, system, model)
+            response = complete(prompt, system, model, effort)
         except _TIMEOUT_ERRORS as e:
             seconds = self.config.request_timeout
             waited = f"{seconds} seconds" if seconds < 120 else f"{seconds / 60:g} minutes"
@@ -313,18 +322,19 @@ class LLMClient:
         response.local = self.provider in ("ollama", "custom")
         return response
 
-    def analyze(self, prompt: str, system: str) -> LLMResponse:
+    def analyze(self, prompt: str, system: str, effort: str | None = None) -> LLMResponse:
         """Use the analysis model for understanding tasks.
 
         Args:
             prompt: User prompt to analyze
             system: System prompt with instructions
+            effort: Reasoning effort override ("low", "medium", "high"), for models that support one
 
         Returns:
             LLMResponse with content and token counts
         """
         model = self.config.model_analysis
-        return self._complete(prompt, system, model)
+        return self._complete(prompt, system, model, effort)
 
     def generate(self, prompt: str, system: str) -> LLMResponse:
         """Use the generation model for track selection.

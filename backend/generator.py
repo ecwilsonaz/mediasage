@@ -122,13 +122,14 @@ def _get_tracks_from_cache_or_plex(
     max_tracks_to_ai: int,
     artists: list[str] | None = None,
     exclude_artists: list[str] | None = None,
+    include_untagged: bool = False,
 ) -> list[Track]:
     """Get tracks from cache if available, otherwise from the media server.
 
     Returns:
         List of Track objects
     """
-    has_filters = genres or decades or min_rating > 0 or artists or exclude_artists
+    has_filters = genres or include_untagged or decades or min_rating > 0 or artists or exclude_artists
     effective_limit = max_tracks_to_ai if max_tracks_to_ai > 0 else 2000
 
     # Try cache first
@@ -142,6 +143,7 @@ def _get_tracks_from_cache_or_plex(
             limit=effective_limit,
             artists=artists,
             exclude_artists=exclude_artists,
+            include_untagged=include_untagged,
         )
         return [_cached_track_to_model(t) for t in cached_tracks]
 
@@ -187,6 +189,7 @@ def generate_playlist_stream(
     max_tracks_to_ai: int = 500,
     artists: list[str] | None = None,
     exclude_artists: list[str] | None = None,
+    include_untagged: bool = False,
     save_to_history: bool = True,
 ) -> Generator[str, None, None]:
     """Generate a playlist with streaming progress updates.
@@ -209,7 +212,7 @@ def generate_playlist_stream(
             yield emit("error", {"message": "Media server not connected"})
             return
 
-        has_filters = genres or decades or min_rating > 0 or artists or exclude_artists
+        has_filters = genres or include_untagged or decades or min_rating > 0 or artists or exclude_artists
 
         # Step 1: Fetch tracks from cache or Plex
         using_cache = library_cache.has_cached_tracks()
@@ -232,6 +235,7 @@ def generate_playlist_stream(
                 max_tracks_to_ai=max_tracks_to_ai,
                 artists=artists,
                 exclude_artists=exclude_artists,
+                include_untagged=include_untagged,
             )
         except PlexQueryError as e:
             yield emit("error", {"message": f"Plex server error: {e}"})
@@ -416,6 +420,7 @@ def generate_playlist_stream(
                 "refinement_answers": refinement_answers,
                 "genres": genres or [],
                 "decades": decades or [],
+                "include_untagged": include_untagged,
                 "artists": artists or [],
                 "exclude_artists": exclude_artists or [],
                 "track_count": track_count,

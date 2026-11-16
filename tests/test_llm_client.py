@@ -438,7 +438,7 @@ class TestOllamaProvider:
 
         client._complete("test prompt", "system prompt", "llama3:8b")
 
-        mock_ollama.assert_called_once_with("test prompt", "system prompt", "llama3:8b")
+        mock_ollama.assert_called_once_with("test prompt", "system prompt", "llama3:8b", None)
 
 
 class TestCustomProvider:
@@ -520,7 +520,7 @@ class TestCustomProvider:
 
         client._complete("test prompt", "system prompt", "my-model")
 
-        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model")
+        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model", None)
 
 
 class TestLocalProviderCosts:
@@ -1060,3 +1060,45 @@ class TestProviderRequestParams:
 
         assert kwargs["max_tokens"] == 8192
         assert "max_completion_tokens" not in kwargs
+
+
+class TestEffortOverride:
+    """analyze(effort=...) lowers reasoning for one call, where the model supports a reasoning setting."""
+
+    def _gemini_config(self, model):
+        from backend.llm_client import LLMClient
+        from backend.models import LLMConfig
+
+        config = LLMConfig(provider="gemini", api_key="k", model_analysis=model, model_generation=model)
+        reply = MagicMock()
+        reply.text = '{"ok": true}'
+        reply.candidates = [MagicMock(finish_reason=None)]
+        reply.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=5)
+        with patch("backend.llm_client.genai") as genai:
+            genai.Client.return_value.models.generate_content.return_value = reply
+            client = LLMClient(config)
+            client.analyze("prompt", "system", effort="low")
+            return genai.Client.return_value.models.generate_content.call_args.kwargs["config"]
+
+    def test_gemini_3_gets_a_thinking_level(self):
+        assert self._gemini_config("gemini-3.8-flash").thinking_config.thinking_level.lower() == "low"
+
+    def test_gemini_2_is_left_alone(self):
+        assert self._gemini_config("gemini-2.5-flash").thinking_config is None
+
+    def test_anthropic_effort_is_overridden(self):
+        from backend.llm_client import LLMClient
+        from backend.models import LLMConfig
+
+        config = LLMConfig(
+            provider="anthropic", api_key="k", model_analysis="claude-sonnet-5-5", model_generation="claude-haiku-4-5",
+        )
+        response = MagicMock(stop_reason="end_turn", content=[MagicMock(type="text", text="{}")])
+        response.usage.input_tokens = response.usage.output_tokens = 1
+        with patch("backend.llm_client.anthropic") as mock_anthropic:
+            mock_client = mock_anthropic.Anthropic.return_value
+            mock_client.messages.create.return_value = response
+            LLMClient(config).analyze("prompt", "system", effort="low")
+            assert mock_client.messages.create.call_args.kwargs["output_config"] == {"effort": "low"}
+            LLMClient(config).analyze("prompt", "system")
+            assert mock_client.messages.create.call_args.kwargs["output_config"] == {"effort": "medium"}
