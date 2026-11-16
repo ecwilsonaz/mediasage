@@ -8,6 +8,8 @@
 #   long_context_threshold, long_input_cost, long_output_cost:
 #     whole request is billed at the long rates above this many input tokens
 #   effort: reasoning effort to request, for models that support it
+#   reasoning_tokens: typical hidden reasoning per analysis call, for models that reason at length by default.
+#     Added to cost estimates; measured Nov 2026 (Claude models reason too little to matter)
 #   legacy: still served, but superseded
 
 anthropic:
@@ -89,11 +91,13 @@ gemini:
     context: 1_000_000
     input_cost: 0.75
     output_cost: 3.75
+    reasoning_tokens: 650
   gemini-3.5-flash:
     label: Gemini 3.5 Flash
     context: 1_000_000
     input_cost: 1.50
     output_cost: 9.00
+    reasoning_tokens: 800
   gemini-3.5-flash-lite:
     label: Gemini 3.5 Flash-Lite
     context: 1_000_000

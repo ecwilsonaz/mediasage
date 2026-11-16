@@ -1018,8 +1018,11 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     # - Analysis call (model_analysis): ~700 input, ~100 output
     # - Generation call (model_generation): ~(tracks * 40) input, ~(track_count * 60) output
     # - Narrative call (model_analysis): ~400 input, ~200 output
+    # Plus hidden reasoning on models that reason at length (Gemini 3.x Flash), for each of the analysis model's
+    # calls: prompt analysis, the clarifying-question analysis, and the narrative.
+    entry = CATALOG_BY_ID.get(config.llm.model_analysis)
     analysis_input = 1100  # analysis (700) + narrative (400)
-    analysis_output = 300  # analysis (100) + narrative (200)
+    analysis_output = 300 + 3 * (entry.reasoning_tokens if entry else 0)  # analysis (100) + narrative (200)
     generation_input = tracks_to_send * 40
     generation_output = request.track_count * 60  # ~60 tokens per track in response
 
@@ -1047,6 +1050,8 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
         estimated_input_tokens=estimated_input_tokens,
         estimated_output_tokens=estimated_output_tokens,
         estimated_cost=estimated_cost,
+        analysis_input_tokens=analysis_input,
+        analysis_output_tokens=analysis_output,
     )
 
 

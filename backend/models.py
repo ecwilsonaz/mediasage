@@ -245,6 +245,9 @@ class FilterPreviewResponse(BaseModel):
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_cost: float
+    # The analysis model's share of the estimate, so the UI can recalculate the cost locally
+    analysis_input_tokens: int = 0
+    analysis_output_tokens: int = 0
 
 
 class SeedTrackInput(BaseModel):

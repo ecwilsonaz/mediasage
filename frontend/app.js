@@ -1524,6 +1524,8 @@ async function updateFilterPreview() {
         // Cache the matching_tracks for local recalculation
         state.lastFilterPreview = {
             matching_tracks: data.matching_tracks,
+            analysis_input_tokens: data.analysis_input_tokens,
+            analysis_output_tokens: data.analysis_output_tokens,
         };
 
         // Update display
@@ -1603,9 +1605,10 @@ function recalculateCostDisplay() {
         tracks_to_send = Math.min(matching_tracks, state.maxTracksToAI);
     }
 
-    // Cost formula (matches backend: separate rates for analysis + generation models)
-    const analysis_input = 1100;
-    const analysis_output = 300;
+    // Cost formula (matches backend: separate rates for analysis + generation models).
+    // The analysis model's tokens come from the backend, which knows its hidden reasoning.
+    const analysis_input = state.lastFilterPreview.analysis_input_tokens ?? 1100;
+    const analysis_output = state.lastFilterPreview.analysis_output_tokens ?? 300;
     const gen_input = tracks_to_send * 40;
     const gen_output = state.trackCount * 60;
 
