@@ -144,7 +144,7 @@ Bring your own API key—or run locally:
 | Provider | Max Tracks | Typical Cost | Best For |
 |----------|------------|--------------|----------|
 | **Google Gemini** | ~22,000 | $0.03 – $0.25 | Large libraries, lowest cost |
-| **Anthropic Claude** | ~4,400 (Haiku) / ~22,000 (Sonnet, Opus) | $0.15 – $1.00 | Nuanced recommendations |
+| **Anthropic Claude** | ~22,000 | $0.01 – $0.40 | Nuanced recommendations |
 | **OpenAI GPT** | ~23,000 | $0.01 – $0.20 | Solid all-around |
 | **Ollama** ⚗️ | Varies | Free | Privacy, local inference |
 | **Custom** ⚗️ | Configurable | Free | Self-hosted, OpenAI-compatible APIs |
@@ -415,9 +415,9 @@ MediaSage uses a two-model strategy by default:
 | Role | Purpose | Models Used |
 |------|---------|-------------|
 | **Analysis** | Interpret prompts, suggest filters, analyze seed tracks | claude-sonnet-5-5 / gpt-6.1-sol / gemini-3.5-flash-lite |
-| **Generation** | Select tracks from filtered list | claude-haiku-4-5 / gpt-6-luna / gemini-3.5-flash-lite |
+| **Generation** | Select tracks from filtered list | claude-haiku-5-5 / gpt-6-luna / gemini-3.5-flash-lite |
 
-This balances quality with cost. Choose other models in Settings, or with `LLM_MODEL_ANALYSIS` / `LLM_MODEL_GENERATION` (which override Settings). For Claude, a 1M-context generation model such as `claude-sonnet-5-5` fits ~5x more tracks than Haiku at about twice the per-token price. Enable `smart_generation: true` to use the analysis model for everything.
+This balances quality with cost. Choose other models in Settings, or with `LLM_MODEL_ANALYSIS` / `LLM_MODEL_GENERATION` (which override Settings). For Claude, Haiku 5.5 bills a request at five times its base rate once the prompt passes 100,000 tokens (about 3,000 tracks), so sending more tracks than that costs noticeably more. Enable `smart_generation: true` to use the analysis model for everything.
 
 ### Local LLM Setup (Experimental)
 

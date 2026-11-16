@@ -34,7 +34,7 @@ llm:
   # Defaults: gemini-3.5-flash-lite (Gemini), claude-sonnet-5-5 (Anthropic), gpt-6.1-sol (OpenAI)
   # model_analysis: "gemini-3.5-flash-lite"
   # Model for generation (selecting tracks from list)
-  # Defaults: gemini-3.5-flash-lite (Gemini), claude-haiku-4-5 (Anthropic), gpt-6-luna (OpenAI)
+  # Defaults: gemini-3.5-flash-lite (Gemini), claude-haiku-5-5 (Anthropic), gpt-6-luna (OpenAI)
   # model_generation: "gemini-3.5-flash-lite"
   # Use the analysis model for generation too (higher quality, ~3-5x cost)
   smart_generation: false
