@@ -10,50 +10,50 @@ services:
       - "5765:5765"
     environment:
       # All optional: you can configure everything in the setup wizard instead.
-      # Values set in .env override Settings; anything left empty is ignored.
+      # Set values in .env (see .env.example), not here. A value set there overrides
+      # Settings; anything left empty is ignored.
 
-      # Media server selection: "plex" or "jellyfin" (auto-detected if only one URL is set)
+      # Media server: "plex" or "jellyfin" (auto-detected if only one URL is set)
       - MEDIA_SERVER=${MEDIA_SERVER:-}
 
-      # Plex server settings
+      # Plex
       - PLEX_URL=${PLEX_URL:-}
       - PLEX_TOKEN=${PLEX_TOKEN:-}
       - PLEX_MUSIC_LIBRARY=${PLEX_MUSIC_LIBRARY:-}
-      # Optional: Plex URL as reached from browsers/phones, if different from PLEX_URL
       - PLEX_PUBLIC_URL=${PLEX_PUBLIC_URL:-}
+      - PLEX_TIMEOUT=${PLEX_TIMEOUT:-}
+      - PLEX_SYNC_PAGE_SIZE=${PLEX_SYNC_PAGE_SIZE:-}
 
-      # Jellyfin server settings (API key: Jellyfin Dashboard > API Keys)
+      # Jellyfin
       - JELLYFIN_URL=${JELLYFIN_URL:-}
       - JELLYFIN_TOKEN=${JELLYFIN_TOKEN:-}
       - JELLYFIN_MUSIC_LIBRARY=${JELLYFIN_MUSIC_LIBRARY:-}
 
-      # Performance tuning
-      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
-
-      # LLM Provider (anthropic, openai, gemini, ollama, or custom)
-      # Defaults to gemini. Can also be configured in the web UI.
-      #- LLM_PROVIDER=gemini
-
-      # Cloud provider API keys (set one)
+      # AI provider, API keys and models
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - LLM_MODEL_ANALYSIS=${LLM_MODEL_ANALYSIS:-}
+      - LLM_MODEL_GENERATION=${LLM_MODEL_GENERATION:-}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-}
 
-      # Optional: Override default models
-      #- LLM_MODEL_ANALYSIS=gemini-3.5-flash-lite
-      #- LLM_MODEL_GENERATION=gemini-3.5-flash-lite
+      # Local AI providers (experimental)
+      - OLLAMA_URL=${OLLAMA_URL:-}
+      - OLLAMA_CONTEXT_WINDOW=${OLLAMA_CONTEXT_WINDOW:-}
+      - CUSTOM_LLM_URL=${CUSTOM_LLM_URL:-}
+      - CUSTOM_LLM_API_KEY=${CUSTOM_LLM_API_KEY:-}
+      - CUSTOM_LLM_MODEL=${CUSTOM_LLM_MODEL:-}
+      - CUSTOM_CONTEXT_WINDOW=${CUSTOM_CONTEXT_WINDOW:-}
 
-      # Local LLM: Ollama (experimental)
-      #- LLM_PROVIDER=ollama
-      #- OLLAMA_URL=http://host.docker.internal:11434
-      #- OLLAMA_CONTEXT_WINDOW=32768
+      # Library sync
+      - LIBRARY_SYNC_HOURS=${LIBRARY_SYNC_HOURS:-}
+      - LIBRARY_INCREMENTAL_MINUTES=${LIBRARY_INCREMENTAL_MINUTES:-}
+      - LIBRARY_CHECK_SECONDS=${LIBRARY_CHECK_SECONDS:-}
+      - LIBRARY_RETRY_MINUTES=${LIBRARY_RETRY_MINUTES:-}
 
-      # Local LLM: Custom OpenAI-compatible API (experimental)
-      #- LLM_PROVIDER=custom
-      #- CUSTOM_LLM_URL=https://openrouter.ai/api/v1
-      #- CUSTOM_LLM_API_KEY=sk-or-your-key
-      #- CUSTOM_LLM_MODEL=meta-llama/llama-3-8b-instruct
-      #- CUSTOM_CONTEXT_WINDOW=32768
+      # Performance tuning
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
     volumes:
       # Settings (config.user.yaml) and the library cache live here
       # Ensure directory is writable: either set 'user' above, or run:

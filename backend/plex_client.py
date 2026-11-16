@@ -21,6 +21,11 @@ from backend.models import PlexClientInfo, PlexPlaylistInfo, Track
 logger = logging.getLogger(__name__)
 
 
+def _env_int(name: str, default: int) -> int:
+    """An integer from the environment. Empty counts as unset: compose passes unset variables as ""."""
+    return int(os.environ.get(name) or default)
+
+
 class TrackCache:
     """In-memory cache for filtered track results with TTL."""
 
@@ -199,7 +204,7 @@ class PlexClient(BaseMediaClient):
         try:
             # 30 s is too short for one all-tracks request on large libraries (~380K tracks timed out and
             # committed an empty cache). Configurable via PLEX_TIMEOUT (seconds), default 300.
-            self._server = PlexServer(self.url, self.token, timeout=int(os.environ.get("PLEX_TIMEOUT", "300")))
+            self._server = PlexServer(self.url, self.token, timeout=_env_int("PLEX_TIMEOUT", 300))
             self._library = self._server.library.section(self.music_library_name)
             self._error = None
         except Unauthorized:
@@ -291,7 +296,7 @@ class PlexClient(BaseMediaClient):
     # ~386K-track library, hours), and a track deleted between listing and processing was a 404 that aborted the
     # whole sync. Read fields with vars() instead. Section listings also carry only the first two genre tags
     # of an album or artist; fetch_metadata returns them all.
-    SYNC_PAGE_SIZE = int(os.environ.get("PLEX_SYNC_PAGE_SIZE", "5000"))
+    SYNC_PAGE_SIZE = _env_int("PLEX_SYNC_PAGE_SIZE", 5000)
     METADATA_BATCH = 500   # keys per /library/metadata/k1,k2,... request (1000 tested fine)
 
     def iter_raw_tracks(self, updated_since: int | None = None) -> Iterator[list[Any]]:
