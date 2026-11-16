@@ -3,7 +3,7 @@
 from rapidfuzz import fuzz, process
 from unidecode import unidecode
 
-from backend import library_cache
+from backend import genre_groups, library_cache
 from backend.config import get_current_media_client
 from backend.llm_client import get_llm_client
 from backend.models import (
@@ -110,11 +110,19 @@ def analyze_prompt(prompt: str) -> AnalyzePromptResponse:
     available_genres = [GenreCount(**g) for g in stats.get("genres", [])]
     available_decades = [DecadeCount(**d) for d in stats.get("decades", [])]
 
+    # With genre groups, the AI picks from the group names and the picks are expanded back to raw tags
+    groups = None
+    if genre_groups.is_active() and library_cache.has_cached_tracks():
+        groups = genre_groups.snapshot()["groups"]
+        genre_choices = [f"{group['name']} ({group['count']})" for group in groups]
+    else:
+        genre_choices = [f"{g.name} ({g.count})" if g.count else g.name for g in available_genres[:30]]
+
     # Build prompt with available filter context
     analysis_prompt = f"""User's playlist request: "{prompt}"
 
 Available genres in their library:
-{', '.join(f"{g.name} ({g.count})" if g.count else g.name for g in available_genres[:30])}
+{', '.join(genre_choices)}
 
 Available decades in their library:
 {', '.join(f"{d.name} ({d.count})" if d.count else d.name for d in available_decades)}
@@ -131,10 +139,10 @@ Suggest genres and decades from the available options that best match the user's
     available_genre_names = {g.name for g in available_genres}
     available_decade_names = {d.name for d in available_decades}
 
-    suggested_genres = [
-        g for g in data.get("genres", [])
-        if g in available_genre_names
-    ]
+    suggested_genres = data.get("genres") or []
+    if groups is not None:
+        suggested_genres = genre_groups.expand(suggested_genres, groups)
+    suggested_genres = [g for g in suggested_genres if g in available_genre_names]
     suggested_decades = [
         d for d in data.get("decades", [])
         if d in available_decade_names

@@ -32,6 +32,7 @@ from backend.config import (
 from backend.version import get_version
 from backend.models import (
     AlbumCandidate,
+    AlbumPreviewRequest,
     AlbumPreviewResponse,
     AnalyzePromptFiltersRequest,
     AnalyzePromptFiltersResponse,
@@ -48,6 +49,7 @@ from backend.models import (
     FilterPreviewRequest,
     FilterPreviewResponse,
     GenerateRequest,
+    GenreGroupsResponse,
     GenreCount,
     HealthResponse,
     LibraryCacheStatusResponse,
@@ -93,7 +95,7 @@ from backend.models import (
 )
 from backend.plex_client import PlexClient as PlexClientInstance, get_plex_client, init_plex_client
 from backend.jellyfin_client import JellyfinClient, get_jellyfin_client, init_jellyfin_client
-from backend import library_cache, scheduler
+from backend import genre_groups, library_cache, scheduler
 from backend.model_catalog import CATALOG_BY_ID, MODEL_CATALOG
 from backend.llm_client import (
     TOKENS_PER_ALBUM,
@@ -142,6 +144,11 @@ async def lifespan(app: FastAPI):
 
     # Initialize DB schema early so migration flag is set
     library_cache.ensure_db_initialized().close()
+
+    # Genre groups follow the library: after each sync, and now in case the tags or settings changed while stopped
+    if genre_groups.update not in library_cache.after_sync:
+        library_cache.after_sync.append(genre_groups.update)
+    _update_genre_groups()
 
     # Re-sync after a schema migration, or when the cache holds another server's or music library's tracks
     # (e.g. MEDIA_SERVER or PLEX_MUSIC_LIBRARY changed). sync_library clears those tracks first.
@@ -266,6 +273,12 @@ async def _keep_library_fresh() -> None:
             logger.exception("Library freshness check failed")
 
 
+def _update_genre_groups(full: bool = False) -> None:
+    """Bring the genre groups up to date in the background (a no-op when the setting is off)."""
+    if genre_groups.is_enabled():
+        asyncio.create_task(asyncio.to_thread(genre_groups.update, full))
+
+
 async def _run_due_schedules() -> None:
     while True:
         await asyncio.sleep(60)
@@ -335,6 +348,7 @@ def _build_config_response(config, media_client) -> ConfigResponse:
         custom_context_window=config.llm.custom_context_window,
         request_timeout=config.llm.request_timeout,
         library_sync_hours=config.library_sync_hours,
+        genre_grouping=config.genre_grouping,
         is_local_provider=is_local,
         env_overrides=env_overrides(config.llm.provider),
         long_context_threshold=gen_entry.long_context_threshold if gen_entry else None,
@@ -703,8 +717,12 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
         )
 
     llm_keys = ["llm_provider", "llm_api_key", "model_analysis", "model_generation", "ollama_url", "custom_url", "request_timeout"]
-    if any(k in updates for k in llm_keys):
+    llm_changed = any(k in updates for k in llm_keys)
+    if llm_changed:
         init_llm_client(config.llm)
+    # Turning grouping on, or getting a working AI provider, is a moment to build the groups
+    if updates.get("genre_grouping") or llm_changed:
+        _update_genre_groups()
 
     if config.media_server != previous_server:
         _resync_for_new_media_server()
@@ -972,6 +990,7 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
             exclude_live=exclude_live,
             artists=request.artists,
             exclude_artists=request.exclude_artists,
+            include_untagged=request.include_untagged,
         )
 
     if matching_tracks < 0:
@@ -1067,6 +1086,7 @@ async def generate_playlist_sse(request: GenerateRequest) -> StreamingResponse:
             refinement_answers=request.refinement_answers,
             genres=request.genres,
             decades=request.decades,
+            include_untagged=request.include_untagged,
             track_count=request.track_count,
             exclude_live=request.exclude_live,
             min_rating=request.min_rating,
@@ -1275,13 +1295,27 @@ async def recommend_albums_preview(
     """Preview filtered album counts and cost estimates for recommendation."""
     genre_list = [g.strip() for g in genres.split(",") if g.strip()] if genres else None
     decade_list = [d.strip() for d in decades.split(",") if d.strip()] if decades else None
+    return await _album_preview(genre_list, decade_list, max_albums)
 
+
+@app.post("/api/recommend/albums/preview", response_model=AlbumPreviewResponse)
+async def recommend_albums_preview_post(request: AlbumPreviewRequest) -> AlbumPreviewResponse:
+    """The same preview with the filters in the body: a long genre selection doesn't fit in a URL."""
+    return await _album_preview(
+        request.genres or None, request.decades or None, request.max_albums, request.include_untagged
+    )
+
+
+async def _album_preview(
+    genre_list: list[str] | None, decade_list: list[str] | None, max_albums: int, include_untagged: bool = False
+) -> AlbumPreviewResponse:
     # Get album count from cache
     if library_cache.has_cached_tracks():
         candidates = await asyncio.to_thread(
             library_cache.get_album_candidates,
             genres=genre_list,
             decades=decade_list,
+            include_untagged=include_untagged,
         )
         matching_albums = len(candidates)
     else:
@@ -1334,12 +1368,19 @@ async def recommend_analyze_prompt(request: AnalyzePromptFiltersRequest) -> Anal
         )
 
     try:
+        # With genre groups, the AI picks from the group names and the picks are expanded back to raw tags
+        groups = None
+        if await asyncio.to_thread(genre_groups.is_active):
+            groups = (await asyncio.to_thread(genre_groups.snapshot))["groups"]
         result = await asyncio.to_thread(
             pipeline.analyze_prompt_filters,
             request.prompt,
-            request.genres,
+            [group["name"] for group in groups] if groups is not None else request.genres,
             request.decades,
         )
+        if groups is not None:
+            available = set(request.genres)
+            result["genres"] = [g for g in genre_groups.expand(result["genres"], groups) if g in available]
         return AnalyzePromptFiltersResponse(
             genres=result["genres"],
             decades=result["decades"],
@@ -1465,6 +1506,7 @@ async def recommend_generate(request: RecommendGenerateRequest, raw_request: Req
             library_cache.get_album_candidates,
             genres=genre_list if request.mode == "library" else None,
             decades=decade_list if request.mode == "library" else None,
+            include_untagged=request.include_untagged and request.mode == "library",
         )
 
         if request.mode == "library" and not candidates_raw:
@@ -1858,6 +1900,38 @@ async def get_result(result_id: str) -> ResultDetail:
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
     return ResultDetail(**result, schedulable=bool(result.get("request")))
+
+
+# =============================================================================
+# Smart Genre Grouping
+# =============================================================================
+
+
+@app.get("/api/genres/groups", response_model=GenreGroupsResponse)
+async def get_genre_groups() -> GenreGroupsResponse:
+    """Genre groups for the filter panel, plus the setting, the last run and a cost estimate for Settings."""
+    active = await asyncio.to_thread(genre_groups.is_active)
+    snapshot = await asyncio.to_thread(genre_groups.snapshot) if active else {}
+    return GenreGroupsResponse(
+        enabled=genre_groups.is_enabled(),
+        active=active,
+        status=genre_groups.status(),
+        estimate=await asyncio.to_thread(genre_groups.estimate),
+        **snapshot,
+    )
+
+
+@app.post("/api/genres/groups/regenerate", status_code=202)
+async def regenerate_genre_groups() -> dict:
+    """Regroup every genre tag from scratch, in the background. Existing groups may change."""
+    if not genre_groups.is_enabled():
+        raise HTTPException(status_code=400, detail="Smart Genre Grouping is turned off")
+    if not get_llm_client():
+        raise HTTPException(status_code=503, detail="LLM not configured")
+    if (genre_groups.status() or {}).get("state") == "running":
+        raise HTTPException(status_code=409, detail="Genres are being grouped right now")
+    _update_genre_groups(full=True)
+    return {"started": True}
 
 
 # =============================================================================

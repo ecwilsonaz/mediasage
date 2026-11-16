@@ -152,6 +152,7 @@ class AppConfig(BaseModel):
     llm: LLMConfig
     defaults: DefaultsConfig = DefaultsConfig()
     library_sync_hours: float = Field(24, ge=0)  # Re-sync the cache once it's this old; 0 = never
+    genre_grouping: bool = False  # Smart genre grouping (backend/genre_groups.py)
 
 
 # =============================================================================
@@ -233,6 +234,7 @@ class FilterPreviewRequest(BaseModel):
     max_tracks_to_ai: int = 500  # 0 = no limit
     min_rating: int = Field(0, ge=0, le=10)  # Plex 0-10 scale (half star = 1); 0 = any
     exclude_live: bool = True
+    include_untagged: bool = False  # Also match tracks with no genre tag
 
 
 class FilterPreviewResponse(BaseModel):
@@ -261,6 +263,7 @@ class GenerateRequest(BaseModel):
     refinement_answers: list[str | None] | None = None
     genres: list[str]
     decades: list[str]
+    include_untagged: bool = False  # Also match tracks with no genre tag
     artists: list[str] = []  # Only these artists
     exclude_artists: list[str] = []
     track_count: int = 25
@@ -468,6 +471,7 @@ class ConfigResponse(BaseModel):
     custom_context_window: int = 32768
     request_timeout: int = 600
     library_sync_hours: float = 24
+    genre_grouping: bool = False
     is_local_provider: bool = False
     # Settings fields set by environment variables (which override Settings), e.g. {"plex_url": "PLEX_URL"}
     env_overrides: dict[str, str] = {}
@@ -499,6 +503,7 @@ class UpdateConfigRequest(BaseModel):
     custom_context_window: int | None = None
     request_timeout: int | None = None
     library_sync_hours: float | None = Field(None, ge=0)
+    genre_grouping: bool | None = None
 
 
 class HealthResponse(BaseModel):
@@ -814,6 +819,7 @@ class RecommendGenerateRequest(BaseModel):
     mode: Literal["library", "discovery"] = "library"
     genres: list[str] = []
     decades: list[str] = []
+    include_untagged: bool = False  # Also match albums with no genre tag
     familiarity_pref: Literal["any", "comfort", "rediscover", "hidden_gems"] = "any"
     max_albums: int = 2500
 
@@ -832,6 +838,13 @@ class RecommendGenerateResponse(BaseModel):
     token_count: int = 0
     estimated_cost: float = 0.0
     research_warning: str | None = None
+
+
+class AlbumPreviewRequest(BaseModel):
+    genres: list[str] = []
+    decades: list[str] = []
+    include_untagged: bool = False
+    max_albums: int = 2500
 
 
 class AlbumPreviewResponse(BaseModel):
@@ -883,6 +896,45 @@ class ResultDetail(BaseModel):
     created_at: str
     snapshot: dict
     schedulable: bool = False  # Can be refreshed on a schedule
+
+
+# =============================================================================
+# Smart Genre Grouping Models
+# =============================================================================
+
+
+class GenreGroup(BaseModel):
+    name: str
+    count: int  # Tracks with at least one of the group's tags
+    genres: list[str]  # Raw tags in the group
+
+
+class GenreGroupingStatus(BaseModel):
+    """How the last grouping run went."""
+
+    state: Literal["ok", "skipped", "error", "running"]
+    message: str
+    tokens: int = 0
+    cost: float = 0
+    at: str
+
+
+class GenreGroupingEstimate(BaseModel):
+    """Rough size of grouping every tag from scratch."""
+
+    genres: int
+    tokens: int
+    cost: float
+
+
+class GenreGroupsResponse(BaseModel):
+    enabled: bool  # The setting
+    active: bool  # Enabled and groups exist: the UI can show them
+    groups: list[GenreGroup] = []
+    non_genre: list[str] = []  # Tags the AI judged not to be genres
+    untagged: int = 0  # Tracks with no genre tag
+    status: GenreGroupingStatus | None = None
+    estimate: GenreGroupingEstimate
 
 
 # =============================================================================

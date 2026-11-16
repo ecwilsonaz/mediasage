@@ -91,6 +91,7 @@ const state = {
     availableGenres: [],
     availableDecades: [],
     selectedGenres: [],
+    includeUntagged: false,    // Also match tracks with no genre tag (smart genre grouping only)
     selectedDecades: [],
     includedArtists: [],
     excludedArtists: [],
@@ -152,6 +153,7 @@ const state = {
         step: 'prompt',        // 'prompt' | 'refine' | 'setup' | 'results'
         prompt: '',
         selectedGenres: [],
+        includeUntagged: false,
         selectedDecades: [],
         familiarityPref: 'any', // 'any' | 'comfort' | 'rediscover' | 'hidden_gems'
         questions: [],
@@ -168,6 +170,10 @@ const state = {
         filterAnalysisPromise: null,
     },
 
+    // Smart genre grouping
+    genreGroups: null,         // Last /api/genres/groups response
+    genreView: 'groups',       // 'groups' | 'tags': how the genre filter lists genres when groups exist
+
     // Setup wizard
     setup: {
         active: false,
@@ -180,9 +186,62 @@ const state = {
 // Filter Helpers
 // =============================================================================
 
-function allGenresSelected() {
-    return state.availableGenres.length > 0 &&
-        state.selectedGenres.length === state.availableGenres.length;
+function genreGroupsActive() {
+    return !!state.genreGroups?.active;
+}
+
+/** The tags "Select All" covers: every genre, minus the tags the AI judged not to be genres. */
+function selectableGenres() {
+    const names = state.availableGenres.map(g => g.name);
+    if (!genreGroupsActive()) return names;
+    const nonGenre = new Set(state.genreGroups.non_genre);
+    return names.filter(name => !nonGenre.has(name));
+}
+
+function allSelectableGenresSelected(store) {
+    const selected = new Set(store.selectedGenres);
+    const selectable = selectableGenres();
+    return selectable.length > 0 && selectable.every(name => selected.has(name));
+}
+
+/**
+ * The genre part of a filter request for the playlist (state) or album (state.rec) flow.
+ * Empty when nothing would be filtered out, which also keeps untagged tracks in.
+ */
+function genreFilter(store) {
+    const all = state.availableGenres.length > 0 &&
+        store.selectedGenres.length === state.availableGenres.length;
+    if (!genreGroupsActive()) return { genres: all ? [] : store.selectedGenres, include_untagged: false };
+    if (all && store.includeUntagged) return { genres: [], include_untagged: false };
+    return { genres: store.selectedGenres, include_untagged: store.includeUntagged };
+}
+
+function saveGenreSelection(store) {
+    try {
+        localStorage.setItem('mediasage-genres', JSON.stringify({ genres: store.selectedGenres }));
+    } catch (e) { /* private browsing */ }
+}
+
+/**
+ * Starting selection when the AI suggested nothing: the genres the user last picked, else every genre.
+ * Non-genre tags and Untagged always start deselected; they are opt-in each time.
+ */
+function restoreGenreSelection(store) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('mediasage-genres')); } catch (e) { /* ignore */ }
+    const selectable = new Set(selectableGenres());
+    const genres = (saved?.genres || []).filter(name => selectable.has(name));
+    store.selectedGenres = genres.length ? genres : [...selectable];
+    store.includeUntagged = false;
+}
+
+async function loadGenreGroups() {
+    try {
+        state.genreGroups = await apiCall('/genres/groups');
+    } catch (e) {
+        state.genreGroups = null;
+    }
+    return state.genreGroups;
 }
 
 function allDecadesSelected() {
@@ -628,6 +687,7 @@ function navigateTo(view, mode) {
     if (view === 'settings') {
         loadSettings();
         loadSchedules();
+        loadGenreGroupingSettings();
     } else if (view === 'recommend') {
         initRecommendView();
     } else if (view === 'home') {
@@ -1221,30 +1281,9 @@ function setupArtistFilter(kind, key) {
 function updateFilters() {
     // Remember which chip had focus so we can restore it after re-render
     const focused = document.activeElement;
-    const focusedGenre = focused?.dataset?.genre;
     const focusedDecade = focused?.dataset?.decade;
 
-    // Update genre chips
-    const genreContainer = document.getElementById('genre-chips');
-    genreContainer.innerHTML = state.availableGenres.map(genre => {
-        const isSelected = state.selectedGenres.includes(genre.name);
-        return `
-        <button class="chip ${isSelected ? 'selected' : ''}"
-                data-genre="${escapeHtml(genre.name)}"
-                aria-pressed="${isSelected}">
-            ${escapeHtml(genre.name)}
-            ${genre.count != null ? `<span class="chip-count">${genre.count}</span>` : ''}
-        </button>
-    `}).join('');
-
-    // Sync genre toggle label
-    const genreToggle = document.getElementById('genre-toggle-all');
-    if (genreToggle) {
-        const allSelected = allGenresSelected();
-        genreToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
-        genreToggle.setAttribute('aria-label',
-            allSelected ? 'Deselect all genres' : 'Select all genres');
-    }
+    renderGenrePanel('playlist');
 
     // Update decade chips
     const decadeContainer = document.getElementById('decade-chips');
@@ -1271,9 +1310,7 @@ function updateFilters() {
     renderArtistChips();
 
     // Restore focus to the chip that was active before re-render
-    if (focusedGenre) {
-        genreContainer.querySelector(`[data-genre="${CSS.escape(focusedGenre)}"]`)?.focus();
-    } else if (focusedDecade) {
+    if (focusedDecade) {
         decadeContainer.querySelector(`[data-decade="${CSS.escape(focusedDecade)}"]`)?.focus();
     }
 
@@ -1456,7 +1493,7 @@ async function updateFilterPreview() {
     try {
         // All selected = no filter (avoids excluding untagged tracks)
         const requestBody = {
-            genres: allGenresSelected() ? [] : state.selectedGenres,
+            ...genreFilter(state),
             decades: allDecadesSelected() ? [] : state.selectedDecades,
             artists: state.includedArtists,
             exclude_artists: state.excludedArtists,
@@ -2426,6 +2463,7 @@ function resetPlaylistState() {
     state.selectedDimensions = [];
     state.additionalNotes = '';
     state.selectedGenres = [];
+    state.includeUntagged = false;
     state.selectedDecades = [];
     state.includedArtists = [];
     state.excludedArtists = [];
@@ -2838,26 +2876,7 @@ function setupEventListeners() {
     setupArtistFilter('include', 'includedArtists');
     setupArtistFilter('exclude', 'excludedArtists');
 
-    document.getElementById('genre-toggle-all').addEventListener('click', () => {
-        state.selectedGenres = allGenresSelected() ? [] : state.availableGenres.map(g => g.name);
-        updateFilters();
-        updateFilterPreview();
-    });
-
-    // Genre chips
-    document.getElementById('genre-chips').addEventListener('click', e => {
-        const chip = e.target.closest('.chip');
-        if (!chip) return;
-
-        const genre = chip.dataset.genre;
-        if (state.selectedGenres.includes(genre)) {
-            state.selectedGenres = state.selectedGenres.filter(g => g !== genre);
-        } else {
-            state.selectedGenres.push(genre);
-        }
-        updateFilters();
-        updateFilterPreview();
-    });
+    setupGenrePanel('playlist');
 
     // Decade toggle all
     document.getElementById('decade-toggle-all').addEventListener('click', () => {
@@ -3038,6 +3057,7 @@ function setupEventListeners() {
     document.getElementById('update-new-playlist-btn').addEventListener('click', handleUpdateSuccessNewPlaylist);
 
     setupScheduleEventListeners();
+    setupGenreGroupingSettings();
 
     // Bottom sheet close handlers
     const bottomSheet = document.getElementById('bottom-sheet');
@@ -3287,10 +3307,10 @@ async function handleContinueToFilters() {
     setLoading(true, 'Loading library data...');
 
     try {
-        const stats = await fetchLibraryStats();
+        const [stats] = await Promise.all([fetchLibraryStats(), loadGenreGroups()]);
         state.availableGenres = stats.genres;
         state.availableDecades = stats.decades;
-        state.selectedGenres = stats.genres.map(g => g.name);
+        restoreGenreSelection(state);
         state.selectedDecades = stats.decades.map(d => d.name);
         state.includedArtists = [];
         state.excludedArtists = [];
@@ -3309,7 +3329,7 @@ async function handleContinueToFilters() {
 async function handleGenerate() {
     // All selected = no filter (avoids excluding untagged tracks)
     const request = {
-        genres: allGenresSelected() ? [] : state.selectedGenres,
+        ...genreFilter(state),
         decades: allDecadesSelected() ? [] : state.selectedDecades,
         artists: state.includedArtists,
         exclude_artists: state.excludedArtists,
@@ -3822,6 +3842,232 @@ function toggleSaveModeDropdown() {
         };
         setTimeout(() => document.addEventListener('click', closeHandler), 0);
     }
+}
+
+// =============================================================================
+// Genre Filter Panel (shared by the playlist and album filter steps)
+// =============================================================================
+
+// Key of the non-genre section in a panel's `expanded` set; the leading space keeps it from being a group name
+const NON_GENRE_SECTION = ' non-genre';
+const GENRE_PANELS = {
+    playlist: {
+        store: state, chips: 'genre-chips', toggle: 'genre-toggle-all', counts: true, expanded: new Set(),
+        changed: () => { updateFilters(); updateFilterPreview(); },
+    },
+    rec: {
+        store: state.rec, chips: 'rec-genre-chips', toggle: 'rec-genre-toggle-all', counts: false, expanded: new Set(),
+        changed: () => { renderRecFilterChips(); updateRecAlbumPreview(); },
+    },
+};
+
+function renderGenrePanel(key) {
+    const panel = GENRE_PANELS[key];
+    const store = panel.store;
+    const container = document.getElementById(panel.chips);
+    if (!container) return;
+
+    const selected = new Set(store.selectedGenres);
+    const trackCounts = new Map(state.availableGenres.map(g => [g.name, g.count]));
+    const count = n => (panel.counts && n != null ? `<span class="chip-count">${n}</span>` : '');
+    const chip = name => `
+        <button class="chip ${selected.has(name) ? 'selected' : ''}"
+                data-genre="${escapeHtml(name)}"
+                aria-pressed="${selected.has(name)}">
+            ${escapeHtml(name)}
+            ${count(trackCounts.get(name))}
+        </button>`;
+
+    // Remember which control had focus so it can be restored after the re-render
+    const focused = container.contains(document.activeElement) ? document.activeElement : null;
+    const focusKey = focused && ['genre', 'group', 'expand', 'genreView', 'untagged'].find(k => k in focused.dataset);
+    const focusValue = focusKey && focused.dataset[focusKey];
+
+    if (!genreGroupsActive()) {
+        container.innerHTML = state.availableGenres.map(g => chip(g.name)).join('');
+    } else {
+        const groups = state.genreGroups;
+        const nonGenre = groups.non_genre.filter(name => trackCounts.has(name));
+        const viewButton = (view, label) => `
+            <button class="genre-view-btn ${state.genreView === view ? 'active' : ''}"
+                    data-genre-view="${view}" aria-pressed="${state.genreView === view}">${label}</button>`;
+        let html = `<div class="genre-view-switch" role="group" aria-label="Genre view">
+            ${viewButton('groups', 'Groups')}${viewButton('tags', 'All tags')}</div>`;
+
+        if (state.genreView === 'groups') {
+            html += groups.groups.map(group => {
+                const members = group.genres.filter(name => trackCounts.has(name));
+                if (!members.length) return '';
+                const on = members.filter(name => selected.has(name)).length;
+                const cls = on === members.length ? 'selected' : on ? 'partial' : '';
+                const open = panel.expanded.has(group.name);
+                const name = escapeHtml(group.name);
+                return `
+                    <span class="chip-group">
+                        <button class="chip chip-group-main ${cls}" data-group="${name}"
+                                aria-pressed="${on === members.length ? 'true' : on ? 'mixed' : 'false'}">
+                            ${name}
+                            ${count(group.count)}
+                        </button><button class="chip chip-expand ${cls}" data-expand="${name}"
+                                aria-expanded="${open}" aria-label="Show the ${members.length} tags in ${name}">${open ? '&#9652;' : '&#9662;'}</button>
+                    </span>
+                    ${open ? `<div class="chip-group-members" role="group" aria-label="Tags in ${name}">${members.map(chip).join('')}</div>` : ''}`;
+            }).join('');
+        } else {
+            const hidden = new Set(nonGenre);
+            html += state.availableGenres.filter(g => !hidden.has(g.name)).map(g => chip(g.name)).join('');
+        }
+
+        // Opt-in extras: tags that aren't genres, and tracks with no tag at all
+        const open = panel.expanded.has(NON_GENRE_SECTION);
+        html += '<div class="genre-extras">';
+        if (nonGenre.length) {
+            html += `<button class="genre-extras-toggle" data-expand="${NON_GENRE_SECTION}" aria-expanded="${open}">
+                Non-genre tags (${nonGenre.length}) ${open ? '&#9652;' : '&#9662;'}</button>`;
+        }
+        if (groups.untagged) {
+            html += `<button class="chip ${store.includeUntagged ? 'selected' : ''}" data-untagged=""
+                    aria-pressed="${store.includeUntagged}">Untagged ${count(groups.untagged)}</button>`;
+        }
+        html += '</div>';
+        if (open && nonGenre.length) {
+            html += `<div class="chip-group-members" role="group" aria-label="Non-genre tags">${nonGenre.map(chip).join('')}</div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    if (focusKey) {
+        const attr = focusKey === 'genreView' ? 'genre-view' : focusKey;
+        container.querySelector(`[data-${attr}="${CSS.escape(focusValue)}"]`)?.focus();
+    }
+
+    const toggle = document.getElementById(panel.toggle);
+    if (toggle) {
+        const allSelected = allSelectableGenresSelected(store);
+        toggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+        toggle.setAttribute('aria-label', allSelected ? 'Deselect all genres' : 'Select all genres');
+    }
+}
+
+function handleGenrePanelClick(key, e) {
+    const panel = GENRE_PANELS[key];
+    const store = panel.store;
+    const data = e.target.closest('button')?.dataset;
+    if (!data) return;
+
+    if ('genreView' in data) {
+        state.genreView = data.genreView;
+        try { localStorage.setItem('mediasage-genre-view', state.genreView); } catch (err) { /* private browsing */ }
+        renderGenrePanel(key);
+        return;
+    }
+    if ('expand' in data) {
+        if (!panel.expanded.delete(data.expand)) panel.expanded.add(data.expand);
+        renderGenrePanel(key);
+        return;
+    }
+
+    // Selections are always raw tags; a group chip toggles all the tags in it
+    const selected = new Set(store.selectedGenres);
+    if ('genre' in data) {
+        if (!selected.delete(data.genre)) selected.add(data.genre);
+    } else if ('group' in data) {
+        const available = new Set(state.availableGenres.map(g => g.name));
+        const group = state.genreGroups.groups.find(g => g.name === data.group);
+        const members = group.genres.filter(name => available.has(name));
+        const allOn = members.every(name => selected.has(name));
+        members.forEach(name => (allOn ? selected.delete(name) : selected.add(name)));
+    } else if ('untagged' in data) {
+        store.includeUntagged = !store.includeUntagged;
+    } else {
+        return;
+    }
+    store.selectedGenres = [...selected];
+    saveGenreSelection(store);
+    panel.changed();
+}
+
+function setupGenrePanel(key) {
+    const panel = GENRE_PANELS[key];
+    document.getElementById(panel.chips)?.addEventListener('click', e => handleGenrePanelClick(key, e));
+    // Select All / Deselect All leaves the opt-in extras (non-genre tags, Untagged) as they are
+    document.getElementById(panel.toggle)?.addEventListener('click', () => {
+        const store = panel.store;
+        const selectable = new Set(selectableGenres());
+        const extras = store.selectedGenres.filter(name => !selectable.has(name));
+        store.selectedGenres = allSelectableGenresSelected(store) ? extras : [...extras, ...selectable];
+        saveGenreSelection(store);
+        panel.changed();
+    });
+}
+
+// =============================================================================
+// Smart Genre Grouping Settings
+// =============================================================================
+
+let _genreGroupingPollTimer = null;
+
+async function loadGenreGroupingSettings() {
+    clearTimeout(_genreGroupingPollTimer);
+    const data = await loadGenreGroups();
+    const estimateEl = document.getElementById('genre-grouping-estimate');
+    const statusEl = document.getElementById('genre-grouping-status');
+    const toggle = document.getElementById('genre-grouping-toggle');
+    const regenerate = document.getElementById('genre-regenerate-btn');
+    if (!data) {
+        estimateEl.textContent = 'Could not load genre grouping.';
+        return;
+    }
+
+    const running = data.status?.state === 'running';
+    toggle.checked = data.enabled;
+    const { genres, tokens, cost } = data.estimate;
+    const price = state.config?.is_local_provider ? ', at no cost on your local model' : ` (about ${formatMoney(cost)})`;
+    estimateEl.textContent = genres
+        ? `Your library has ${genres.toLocaleString()} genre tags. Grouping them all takes roughly ${tokens.toLocaleString()} tokens${price}. That happens once, on the first run; after that a library sync only sends tags it hasn't seen before.`
+        : 'Sync your library to see what grouping its genre tags would cost.';
+
+    if (!data.enabled || !data.status) {
+        statusEl.textContent = '';
+    } else if (running) {
+        statusEl.textContent = 'Grouping genres now. This can take a few minutes.';
+    } else {
+        const usage = data.status.tokens
+            ? ` (${data.status.tokens.toLocaleString()} tokens, $${data.status.cost.toFixed(4)})`
+            : '';
+        statusEl.textContent = `Last run, ${relativeTime(data.status.at).toLowerCase()}: ${data.status.message}${usage}`;
+    }
+    statusEl.classList.toggle('genre-grouping-error', data.status?.state === 'error' && data.enabled);
+
+    resetScheduleConfirm();
+    regenerate.classList.toggle('hidden', !data.enabled);
+    regenerate.disabled = running;
+    document.getElementById('genre-regenerate-hint').classList.toggle('hidden', !data.enabled);
+
+    if (running && state.view === 'settings') {
+        _genreGroupingPollTimer = setTimeout(loadGenreGroupingSettings, 4000);
+    }
+}
+
+function setupGenreGroupingSettings() {
+    document.getElementById('genre-grouping-toggle').addEventListener('change', async (e) => {
+        try {
+            state.config = await updateConfig({ genre_grouping: e.target.checked });
+        } catch (error) {
+            showError(error.message);
+        }
+        loadGenreGroupingSettings();
+    });
+
+    document.getElementById('genre-regenerate-btn').addEventListener('click', async (e) => {
+        if (!confirmScheduleAction('genre-regenerate', e.currentTarget, 'Groups may change. Regenerate?')) return;
+        try {
+            await apiCall('/genres/groups/regenerate', { method: 'POST' });
+        } catch (error) {
+            showError(error.message);
+        }
+        loadGenreGroupingSettings();
+    });
 }
 
 // =============================================================================
@@ -4515,6 +4761,7 @@ async function initRecommendView() {
 }
 
 async function loadRecommendFilters() {
+    await loadGenreGroups();
     // Reuse genres/decades already fetched by loadSettings() if available
     if (state.availableGenres.length === 0) {
         try {
@@ -4537,14 +4784,7 @@ function renderRecFilterChips() {
     const decadeContainer = document.getElementById('rec-decade-chips');
     if (!genreContainer || !decadeContainer) return;
 
-    genreContainer.innerHTML = state.availableGenres.map(genre => {
-        const isSelected = state.rec.selectedGenres.includes(genre.name);
-        return `<button class="chip ${isSelected ? 'selected' : ''}"
-                data-genre="${escapeHtml(genre.name)}"
-                aria-pressed="${isSelected}">
-            ${escapeHtml(genre.name)}
-        </button>`;
-    }).join('');
+    renderGenrePanel('rec');
 
     decadeContainer.innerHTML = state.availableDecades.map(decade => {
         const isSelected = state.rec.selectedDecades.includes(decade.name);
@@ -4555,13 +4795,6 @@ function renderRecFilterChips() {
         </button>`;
     }).join('');
 
-    // Sync toggle labels
-    const genreToggle = document.getElementById('rec-genre-toggle-all');
-    if (genreToggle) {
-        const allSelected = state.availableGenres.length > 0 &&
-            state.rec.selectedGenres.length === state.availableGenres.length;
-        genreToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
-    }
     const decadeToggle = document.getElementById('rec-decade-toggle-all');
     if (decadeToggle) {
         const allSelected = state.availableDecades.length > 0 &&
@@ -4680,21 +4913,18 @@ async function updateRecAlbumPreview() {
 
     try {
         // All selected = no filter (avoids excluding untagged albums)
-        const allGenres = state.availableGenres.length > 0 &&
-            state.rec.selectedGenres.length === state.availableGenres.length;
         const allDecades = state.availableDecades.length > 0 &&
             state.rec.selectedDecades.length === state.availableDecades.length;
-        const params = new URLSearchParams();
-        if (!allGenres && state.rec.selectedGenres.length) {
-            params.set('genres', state.rec.selectedGenres.join(','));
-        }
-        if (!allDecades && state.rec.selectedDecades.length) {
-            params.set('decades', state.rec.selectedDecades.join(','));
-        }
-        params.set('max_albums', state.rec.maxAlbumsToAI);
-
-        const response = await fetch(`/api/recommend/albums/preview?${params}`, {
+        // POST: a long genre selection doesn't fit in a URL
+        const response = await fetch('/api/recommend/albums/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             signal: recPreviewController.signal,
+            body: JSON.stringify({
+                ...genreFilter(state.rec),
+                decades: allDecades ? [] : state.rec.selectedDecades,
+                max_albums: state.rec.maxAlbumsToAI,
+            }),
         });
 
         if (!response.ok) {
@@ -4803,13 +5033,15 @@ async function handleRefineNext() {
 
     // Await the cached filter analysis promise
     const filterData = await state.rec.filterAnalysisPromise;
+    await loadGenreGroups();
     if (filterData) {
         state.rec.selectedGenres = filterData.genres || [];
+        state.rec.includeUntagged = false;
         state.rec.selectedDecades = filterData.decades || [];
         if (infoBanner) infoBanner.classList.remove('hidden');
     } else {
         // Fallback: all included (empty = no filter)
-        state.rec.selectedGenres = state.availableGenres.map(g => g.name);
+        restoreGenreSelection(state.rec);
         state.rec.selectedDecades = state.availableDecades.map(d => d.name);
         if (infoBanner) infoBanner.classList.add('hidden');
     }
@@ -4885,6 +5117,7 @@ function setupQuestionEventHandlers(container, stateObj, renderFn) {
 async function handlePlaylistRefineNext() {
     // Await the cached filter analysis promise (fired in parallel during handleAnalyzePrompt)
     const response = await state.filterAnalysisPromise;
+    await loadGenreGroups();
     if (response) {
         // Track analysis costs
         state.sessionTokens += response.token_count || 0;
@@ -4893,6 +5126,7 @@ async function handlePlaylistRefineNext() {
         state.availableGenres = response.available_genres;
         state.availableDecades = response.available_decades;
         state.selectedGenres = response.suggested_genres;
+        state.includeUntagged = false;
         state.selectedDecades = response.suggested_decades;
         state.includedArtists = response.suggested_artists || [];
         state.excludedArtists = [];
@@ -4902,7 +5136,7 @@ async function handlePlaylistRefineNext() {
             const stats = await fetchLibraryStats();
             state.availableGenres = stats.genres;
             state.availableDecades = stats.decades;
-            state.selectedGenres = stats.genres.map(g => g.name);
+            restoreGenreSelection(state);
             state.selectedDecades = stats.decades.map(d => d.name);
         } catch {
             // Last resort: empty filters
@@ -4980,7 +5214,7 @@ async function handleRecGenerate() {
                 answers: state.rec.answers,
                 answer_texts: state.rec.answerTexts,
                 mode: state.rec.mode,
-                genres: (state.availableGenres.length > 0 && state.rec.selectedGenres.length === state.availableGenres.length) ? [] : state.rec.selectedGenres,
+                ...genreFilter(state.rec),
                 decades: (state.availableDecades.length > 0 && state.rec.selectedDecades.length === state.availableDecades.length) ? [] : state.rec.selectedDecades,
                 familiarity_pref: state.rec.familiarityPref,
                 max_albums: state.rec.maxAlbumsToAI,
@@ -5324,6 +5558,7 @@ function resetRecState() {
     state.rec.prompt = '';
     state.rec.loading = false;
     state.rec.selectedGenres = [];
+    state.rec.includeUntagged = false;
     state.rec.selectedDecades = [];
     state.rec.questions = [];
     state.rec.answers = [];
@@ -5427,21 +5662,7 @@ function setupRecEventListeners() {
     }
 
     // Recommend filter chips - event delegation
-    const recGenreChips = document.getElementById('rec-genre-chips');
-    if (recGenreChips) {
-        recGenreChips.addEventListener('click', e => {
-            const chip = e.target.closest('.chip');
-            if (!chip) return;
-            const genre = chip.dataset.genre;
-            if (state.rec.selectedGenres.includes(genre)) {
-                state.rec.selectedGenres = state.rec.selectedGenres.filter(g => g !== genre);
-            } else {
-                state.rec.selectedGenres.push(genre);
-            }
-            renderRecFilterChips();
-            updateRecAlbumPreview();
-        });
-    }
+    setupGenrePanel('rec');
 
     const recDecadeChips = document.getElementById('rec-decade-chips');
     if (recDecadeChips) {
@@ -5460,16 +5681,6 @@ function setupRecEventListeners() {
     }
 
     // Genre/decade toggle all
-    const recGenreToggle = document.getElementById('rec-genre-toggle-all');
-    if (recGenreToggle) {
-        recGenreToggle.addEventListener('click', () => {
-            const allSelected = state.availableGenres.length > 0 &&
-                state.rec.selectedGenres.length === state.availableGenres.length;
-            state.rec.selectedGenres = allSelected ? [] : state.availableGenres.map(g => g.name);
-            renderRecFilterChips();
-            updateRecAlbumPreview();
-        });
-    }
 
     const recDecadeToggle = document.getElementById('rec-decade-toggle-all');
     if (recDecadeToggle) {
@@ -6077,6 +6288,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Restore save mode from localStorage AFTER config loads (US3 — T017)
     let initialMode = 'new';
     try {
+        if (localStorage.getItem('mediasage-genre-view') === 'tags') state.genreView = 'tags';
         const savedMode = localStorage.getItem('mediasage-save-mode');
         if (savedMode === 'replace' || savedMode === 'append') {
             initialMode = savedMode;

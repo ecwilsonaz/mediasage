@@ -152,6 +152,16 @@ def init_schema(conn: sqlite3.Connection) -> bool:
         CREATE INDEX IF NOT EXISTS idx_results_type_created ON results(type, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at DESC);
 
+        -- Smart genre grouping (backend/genre_groups.py): a NULL group_name marks a tag that isn't a genre
+        CREATE TABLE IF NOT EXISTS genre_groups (
+            name TEXT PRIMARY KEY,
+            description TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS genre_mappings (
+            genre TEXT PRIMARY KEY,
+            group_name TEXT
+        );
+
         -- Scheduled playlist refreshes (backend/scheduler.py)
         CREATE TABLE IF NOT EXISTS schedules (
             id TEXT PRIMARY KEY,
@@ -224,7 +234,10 @@ def init_schema(conn: sqlite3.Connection) -> bool:
     # re-sync); incremental_at = watermark of the last successful sync (full or incremental) for the next
     # incremental one. Neither is a data migration (no re-sync just for adding them).
     # library_id = the music library the cache was synced from (NULL on caches older than the column).
-    for column in ("sync_started_at TEXT", "incremental_at TEXT", "library_id TEXT"):
+    # genre_hash / genre_grouping = the tag list the genre groups were built from, and how the last run went.
+    for column in (
+        "sync_started_at TEXT", "incremental_at TEXT", "library_id TEXT", "genre_hash TEXT", "genre_grouping JSON",
+    ):
         try:
             conn.execute(f"ALTER TABLE sync_state ADD COLUMN {column}")
         except sqlite3.OperationalError:
@@ -242,7 +255,8 @@ _migration_applied = False
 
 # Bump when sync starts storing different data, so existing caches re-sync on upgrade.
 # 2: Plex genres combine album, artist and track genres (album only before)
-CACHE_VERSION = 2
+# 3: genre strings holding several genres ("Rock; Pop") are split into separate tags
+CACHE_VERSION = 3
 
 
 def ensure_db_initialized() -> sqlite3.Connection:
@@ -383,11 +397,13 @@ def get_tracks_by_filters(
     limit: int = 0,
     artists: list[str] | None = None,
     exclude_artists: list[str] | None = None,
+    include_untagged: bool = False,
 ) -> list[dict[str, Any]]:
     """Get tracks from cache matching filter criteria.
 
     Args:
         genres: List of genre names to include (OR matching)
+        include_untagged: Also include tracks with no genre tag (see genre_filter)
         decades: List of decades like "1990s" (OR matching)
         min_rating: Minimum user rating (0-10, 0 = no filter)
         exclude_live: Whether to exclude live recordings
@@ -432,7 +448,8 @@ def get_tracks_by_filters(
 
         # Only apply SQL LIMIT when no genre filter (genre filtering happens in Python)
         # If genres are specified, we need all matching tracks first, then filter, then sample
-        if limit > 0 and not genres:
+        genre_match = genre_filter(genres, include_untagged)
+        if limit > 0 and not genre_match:
             query += " ORDER BY RANDOM() LIMIT ?"
             params.append(limit)
 
@@ -448,15 +465,13 @@ def get_tracks_by_filters(
                 track["genres"] = []
 
             # Genre filtering in Python (JSON field doesn't support SQL IN)
-            if genres:
-                track_genres = [g.lower() for g in track["genres"]]
-                if not any(g.lower() in track_genres for g in genres):
-                    continue
+            if genre_match and not genre_match(track["genres"]):
+                continue
 
             tracks.append(track)
 
         # Apply limit after genre filtering with random sampling
-        if limit > 0 and genres and len(tracks) > limit:
+        if limit > 0 and genre_match and len(tracks) > limit:
             tracks = random.sample(tracks, limit)
 
         return tracks
@@ -537,13 +552,41 @@ _INSERT_TRACK_SQL = (
 )
 
 
+# Called after every successful sync, once the cache is readable again (genre grouping)
+after_sync: list[Callable[[], Any]] = []
+
+
 def _merge_genres(*genre_lists: list[str]) -> list[str]:
-    """Combine genre lists in order, dropping case-insensitive duplicates."""
+    """Combine genre lists in order, dropping case-insensitive duplicates.
+
+    A tag holding several genres ("Rock; Pop") is split on ; and , first. "/" is left alone:
+    "Rock/Pop" is two genres but "R&B/Soul" may be meant as one.
+    """
     merged: dict[str, str] = {}
     for genres in genre_lists:
-        for genre in genres:
-            merged.setdefault(genre.lower(), genre)
+        for tag in genres:
+            for genre in re.split(r"[;,]", tag):
+                genre = genre.strip()
+                if genre:
+                    merged.setdefault(genre.lower(), genre)
     return list(merged.values())
+
+
+def genre_filter(genres: list[str] | None, include_untagged: bool = False) -> Callable[[list[str]], bool] | None:
+    """A test for a track's genre tags, or None when genres aren't being filtered.
+
+    A track passes if it has any of `genres` (case-insensitive), or has no tags and include_untagged is set.
+    """
+    if not genres and not include_untagged:
+        return None
+    wanted = {g.lower() for g in genres or []}
+
+    def matches(track_genres: list[str]) -> bool:
+        if not track_genres:
+            return include_untagged
+        return any(g.lower() in wanted for g in track_genres)
+
+    return matches
 
 
 def _track_genre_tags(raw: dict[str, Any]) -> list[str]:
@@ -606,7 +649,7 @@ def _jellyfin_track_row(row: dict[str, Any]) -> tuple:
         track.album,
         track.duration_ms,
         track.year,
-        json.dumps(track.genres),
+        json.dumps(_merge_genres(track.genres)),
         track.user_rating,
         _is_live_version(track.title, track.album),
         row["album_key"],
@@ -725,6 +768,7 @@ def sync_library(
     start_time = time.time()
     started_at = datetime.now(timezone.utc)
     conn = None
+    completed = False
     label = "Incremental sync" if incremental else "Sync"
 
     try:
@@ -860,6 +904,7 @@ def sync_library(
         if not incremental:
             _migration_applied = False
 
+        completed = True
         return {
             "success": True,
             "track_count": track_count,
@@ -891,6 +936,12 @@ def sync_library(
             _sync_state["total"] = 0
         if conn:
             conn.close()
+        if completed:
+            for hook in after_sync:
+                try:
+                    hook()
+                except Exception:
+                    logger.exception("After-sync step failed")
 
 
 def _clear_sync_marker(conn: sqlite3.Connection) -> None:
@@ -919,11 +970,13 @@ def count_tracks_by_filters(
     exclude_live: bool = True,
     artists: list[str] | None = None,
     exclude_artists: list[str] | None = None,
+    include_untagged: bool = False,
 ) -> int:
     """Count tracks matching filter criteria without fetching full data.
 
     Args:
         genres: List of genre names to include (OR matching)
+        include_untagged: Also count tracks with no genre tag (see genre_filter)
         decades: List of decades like "1990s" (OR matching)
         min_rating: Minimum user rating (0-10, 0 = no filter)
         exclude_live: Whether to exclude live recordings
@@ -967,7 +1020,8 @@ def count_tracks_by_filters(
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
         # No genre filter - use simple count query
-        if not genres:
+        genre_match = genre_filter(genres, include_untagged)
+        if not genre_match:
             query = f"SELECT COUNT(*) FROM tracks WHERE {where_clause}"
             count = conn.execute(query, params).fetchone()[0]
             return count
@@ -976,16 +1030,7 @@ def count_tracks_by_filters(
         query = f"SELECT genres FROM tracks WHERE {where_clause}"
         rows = conn.execute(query, params).fetchall()
 
-        count = 0
-        genres_lower = [g.lower() for g in genres]
-        for row in rows:
-            if row["genres"]:
-                track_genres = json.loads(row["genres"])
-                track_genres_lower = [g.lower() for g in track_genres]
-                if any(g in track_genres_lower for g in genres_lower):
-                    count += 1
-
-        return count
+        return sum(1 for row in rows if genre_match(json.loads(row["genres"] or "[]")))
     finally:
         conn.close()
 
@@ -1069,6 +1114,7 @@ def get_album_candidates(
     genres: list[str] | None = None,
     decades: list[str] | None = None,
     exclude_live: bool = True,
+    include_untagged: bool = False,
 ) -> list[dict[str, Any]]:
     """Get album candidates aggregated from cached tracks.
 
@@ -1079,6 +1125,7 @@ def get_album_candidates(
         genres: Optional genre filter (OR matching)
         decades: Optional decade filter (OR matching, e.g. "1990s")
         exclude_live: Exclude live recordings (default True)
+        include_untagged: Also include albums with no genre tag (see genre_filter)
 
     Returns:
         List of album dicts with parent_rating_key, album, album_artist,
@@ -1150,15 +1197,13 @@ def get_album_candidates(
 
         # Apply genre filter in Python (genres stored as JSON)
         result = []
-        genres_lower = [g.lower() for g in genres] if genres else None
+        genre_match = genre_filter(genres, include_untagged)
         for album in albums.values():
             # Remove internal tracking set
             del album["_genre_set"]
 
-            if genres_lower:
-                album_genres_lower = [g.lower() for g in album["genres"]]
-                if not any(g in album_genres_lower for g in genres_lower):
-                    continue
+            if genre_match and not genre_match(album["genres"]):
+                continue
 
             result.append(album)
 
