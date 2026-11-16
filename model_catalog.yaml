@@ -26,11 +26,21 @@ anthropic:
     input_cost: 2.00
     output_cost: 10.00
     effort: medium
+  claude-haiku-5-5:
+    label: Claude Haiku 5.5
+    context: 1_000_000
+    input_cost: 0.10
+    output_cost: 0.50
+    long_context_threshold: 100_000
+    long_input_cost: 0.50
+    long_output_cost: 2.50
+    effort: low
   claude-haiku-4-5:
     label: Claude Haiku 4.5
     context: 200_000
     input_cost: 1.00
     output_cost: 5.00
+    legacy: true
   claude-fable-5-1:
     label: Claude Fable 5.1
     context: 1_000_000

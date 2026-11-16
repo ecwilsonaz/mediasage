@@ -582,7 +582,7 @@ async def setup_validate_ai(request: ValidateAIRequest) -> ValidateAIResponse:
             client = anthropic.Anthropic(api_key=request.api_key)
             await asyncio.to_thread(
                 client.messages.create,
-                model="claude-haiku-4-5",
+                model="claude-haiku-5-5",
                 max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
             )

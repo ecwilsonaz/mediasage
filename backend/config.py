@@ -52,7 +52,7 @@ RETIRED_MODELS = {"gemini-2.5-flash", "gemini-2.5-pro"}
 MODEL_DEFAULTS = {
     "anthropic": {
         "analysis": "claude-sonnet-5-5",
-        "generation": "claude-haiku-4-5",
+        "generation": "claude-haiku-5-5",
     },
     "openai": {
         "analysis": "gpt-6.1-sol",

@@ -453,7 +453,7 @@ MediaSage works with several AI providers. Gemini is the default because it's fr
 |---|---|---|---|
 | **Google Gemini** | `GEMINI_API_KEY` | Free tier available | Recommended. Handles ~22,000 tracks. |
 | **OpenAI** | `OPENAI_API_KEY` | ~$0.01-0.20/playlist | Handles ~23,000 tracks. |
-| **Anthropic Claude** | `ANTHROPIC_API_KEY` | ~$0.15-1.00/playlist | Handles ~4,400 tracks with Haiku, ~22,000 with Sonnet. Nuanced taste. |
+| **Anthropic Claude** | `ANTHROPIC_API_KEY` | ~$0.01-0.40/playlist | Handles ~22,000 tracks. Nuanced taste. |
 
 The simplest way to switch is **Settings → LLM Provider**: pick the provider, paste its key and save. Each provider keeps its own key, so you can switch back and forth.
 

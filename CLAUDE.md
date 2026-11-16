@@ -104,10 +104,10 @@ CUSTOM_CONTEXT_WINDOW=4096
 | Task | Anthropic | OpenAI | Gemini |
 |------|-----------|--------|--------|
 | Analysis | `claude-sonnet-5-5` | `gpt-6.1-sol` | `gemini-3.5-flash-lite` |
-| Generation | `claude-haiku-4-5` | `gpt-6-luna` | `gemini-3.5-flash-lite` |
-| Generation context | 200K tokens | 1.05M tokens | 1M tokens |
+| Generation | `claude-haiku-5-5` | `gpt-6-luna` | `gemini-3.5-flash-lite` |
+| Generation context | 1M tokens | 1.05M tokens | 1M tokens |
 
-All models, prices and context windows live in `model_catalog.yaml` (loaded by `backend/model_catalog.py`), which also feeds the Settings model dropdowns via `GET /api/models`. A 1M context fits ~22,000 tracks; Haiku's 200K fits ~4,400.
+All models, prices and context windows live in `model_catalog.yaml` (loaded by `backend/model_catalog.py`), which also feeds the Settings model dropdowns via `GET /api/models`. A 1M context fits ~22,000 tracks. Haiku 5.5 bills the whole request at 5x its base rate above 100K input tokens (~3,000 tracks).
 
 Option: `smart_generation: true` uses analysis model for both (higher quality, ~3-5x cost)
 

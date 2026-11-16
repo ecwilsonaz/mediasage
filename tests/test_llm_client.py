@@ -908,6 +908,17 @@ class TestModelCatalog:
         with pytest.raises(TypeError):
             load_catalog(path)
 
+    def test_haiku_5_5_long_prompts_cost_more(self):
+        """Above 100K input tokens, the whole request is billed at Haiku 5.5's higher rates."""
+        from backend.llm_client import estimate_cost_for_model
+
+        assert estimate_cost_for_model("claude-haiku-5-5", 100_000, 1_000) == pytest.approx(
+            (100_000 * 0.10 + 1_000 * 0.50) / 1_000_000
+        )
+        assert estimate_cost_for_model("claude-haiku-5-5", 100_001, 1_000) == pytest.approx(
+            (100_001 * 0.50 + 1_000 * 2.50) / 1_000_000
+        )
+
     def test_catalog_ids_unique(self):
         """Model IDs should not repeat."""
         from backend.model_catalog import CATALOG_BY_ID, MODEL_CATALOG
