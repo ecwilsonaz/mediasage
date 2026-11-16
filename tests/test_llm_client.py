@@ -1073,7 +1073,7 @@ class TestEffortOverride:
         reply = MagicMock()
         reply.text = '{"ok": true}'
         reply.candidates = [MagicMock(finish_reason=None)]
-        reply.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=5)
+        reply.usage_metadata = MagicMock(prompt_token_count=10, candidates_token_count=5, thoughts_token_count=None)
         with patch("backend.llm_client.genai") as genai:
             genai.Client.return_value.models.generate_content.return_value = reply
             client = LLMClient(config)
@@ -1102,3 +1102,49 @@ class TestEffortOverride:
             assert mock_client.messages.create.call_args.kwargs["output_config"] == {"effort": "low"}
             LLMClient(config).analyze("prompt", "system")
             assert mock_client.messages.create.call_args.kwargs["output_config"] == {"effort": "medium"}
+
+
+class TestGeminiUsage:
+    """Gemini bills reasoning ("thinking") tokens and retried attempts as output; both must be counted."""
+
+    def _reply(self, text, finish_reason=None, prompt=100, output=50, reasoning=None):
+        reply = MagicMock()
+        reply.text = text
+        reply.candidates = [MagicMock(finish_reason=finish_reason)]
+        reply.usage_metadata = MagicMock(
+            prompt_token_count=prompt, candidates_token_count=output, thoughts_token_count=reasoning
+        )
+        return reply
+
+    def _analyze(self, *replies):
+        from backend.llm_client import LLMClient
+        from backend.models import LLMConfig
+
+        config = LLMConfig(
+            provider="gemini", api_key="k", model_analysis="gemini-3.8-flash", model_generation="gemini-3.8-flash"
+        )
+        with patch("backend.llm_client.genai") as genai:
+            genai.Client.return_value.models.generate_content.side_effect = list(replies)
+            return LLMClient(config).analyze("prompt", "system")
+
+    def test_reasoning_tokens_are_output(self):
+        result = self._analyze(self._reply('{"ok": true}', reasoning=400))
+        assert (result.input_tokens, result.output_tokens) == (100, 450)
+        # gemini-3.8-flash: $0.75 / $3.75 per million
+        assert result.estimated_cost() == pytest.approx((100 * 0.75 + 450 * 3.75) / 1_000_000)
+
+    def test_no_reasoning_reported(self):
+        result = self._analyze(self._reply('{"ok": true}'))
+        assert result.output_tokens == 50
+
+    def test_retried_attempts_are_counted(self):
+        from backend.llm_client import genai_types
+
+        result = self._analyze(
+            self._reply("", reasoning=300),
+            self._reply("partial", finish_reason=genai_types.FinishReason.MAX_TOKENS, output=20),
+            self._reply('{"ok": true}', reasoning=100),
+        )
+        assert result.content == '{"ok": true}'
+        assert result.input_tokens == 300
+        assert result.output_tokens == (50 + 300) + 20 + (50 + 100)

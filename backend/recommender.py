@@ -464,6 +464,8 @@ class RecommendationPipeline:
             "genres": genres,
             "decades": decades,
             "reasoning": raw.get("reasoning", ""),
+            "token_count": response.total_tokens,
+            "estimated_cost": response.estimated_cost(),
         }
 
     def generate_questions(

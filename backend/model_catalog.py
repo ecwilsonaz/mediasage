@@ -22,6 +22,7 @@ class CatalogModel:
     long_input_cost: float | None = None
     long_output_cost: float | None = None
     effort: str | None = None
+    reasoning_tokens: int = 0
     legacy: bool = False
 
 

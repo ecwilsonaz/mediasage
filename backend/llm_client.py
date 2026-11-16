@@ -177,6 +177,7 @@ class LLMClient:
         truncation (MAX_TOKENS finish reason) or empty responses.
         """
         last_error = None
+        input_tokens = output_tokens = 0
         # Gemini 3 models think at length by default; 2.x models take a token budget instead of a level
         version = re.match(r"gemini-(\d+)", model)
         thinking = (
@@ -206,9 +207,14 @@ class LLMClient:
             # Extract content
             usage = response.usage_metadata
             content = response.text if response.text else ""
+            # Reasoning ("thinking") tokens are billed as output but reported separately, and retried
+            # attempts are billed too, so all of it is added up
+            reasoning = (usage.thoughts_token_count or 0) if usage else 0
+            input_tokens += (usage.prompt_token_count or 0) if usage else 0
+            output_tokens += ((usage.candidates_token_count or 0) if usage else 0) + reasoning
 
-            logger.info("Gemini response: %d chars, finish_reason=%s, output_tokens=%d",
-                       len(content), finish_reason, usage.candidates_token_count if usage else 0)
+            logger.info("Gemini response: %d chars, finish_reason=%s, output_tokens=%d (%d reasoning)",
+                       len(content), finish_reason, usage.candidates_token_count if usage else 0, reasoning)
 
             # Check for truncation or empty response
             if finish_reason == genai_types.FinishReason.MAX_TOKENS:
@@ -226,8 +232,8 @@ class LLMClient:
             # Success - return the response
             return LLMResponse(
                 content=content,
-                input_tokens=usage.prompt_token_count if usage else 0,
-                output_tokens=usage.candidates_token_count if usage else 0,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 model=model,
             )
 

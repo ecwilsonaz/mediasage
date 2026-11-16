@@ -579,3 +579,47 @@ class TestNoMatches:
 
         complete = next(e for e in events if "event: complete" in e)
         assert '"track_count": 1' in complete
+
+
+class TestReportedCost:
+    """The cost reported for a playlist covers every AI call that made it, not just track selection."""
+
+    def test_narrative_calls_are_recorded(self):
+        from backend.generator import generate_narrative
+
+        first, second = MagicMock(), MagicMock()
+        client = MagicMock()
+        client.analyze.side_effect = [first, second]
+        client.parse_json_response.side_effect = [ValueError("bad JSON"), {"title": "T", "narrative": "N"}]
+        calls = []
+        with patch("backend.generator.time.sleep"):
+            generate_narrative([{"artist": "A", "title": "B"}], client, "x", calls)
+        assert calls == [first, second]  # the failed attempt was billed too
+
+    def test_playlist_cost_includes_the_narrative(self, mock_plex_tracks):
+        from backend.generator import generate_playlist_stream
+        from backend.llm_client import LLMResponse
+
+        selection = LLMResponse(
+            content=json.dumps([{"artist": "Radiohead", "title": "Fake Plastic Trees"}]),
+            input_tokens=1000, output_tokens=100, model="gemini-3.5-flash-lite",
+        )
+        narrative = LLMResponse(
+            content='{"title": "T", "narrative": "N"}', input_tokens=100, output_tokens=700, model="gemini-3.8-flash",
+        )
+        client = MagicMock()
+        client.generate.return_value = selection
+        client.analyze.return_value = narrative
+        client.parse_json_response.side_effect = [json.loads(selection.content), {"title": "T", "narrative": "N"}]
+        media = MagicMock()
+        media.get_tracks_by_filters.return_value = mock_plex_tracks[:5]
+        with patch("backend.generator.get_llm_client", return_value=client), \
+                patch("backend.generator.get_current_media_client", return_value=media), \
+                patch("backend.generator.library_cache.has_cached_tracks", return_value=False), \
+                patch("backend.generator.library_cache.save_result", return_value="abc123") as save:
+            events = _parse_sse_events(generate_playlist_stream(prompt="p", genres=["Rock"], decades=[]))
+
+        complete = next(data for kind, data in events if kind == "complete")
+        assert complete["token_count"] == 1100 + 800
+        assert complete["estimated_cost"] == pytest.approx(selection.estimated_cost() + narrative.estimated_cost())
+        assert save.call_args.kwargs["snapshot"]["estimated_cost"] == pytest.approx(complete["estimated_cost"])

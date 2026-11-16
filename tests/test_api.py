@@ -451,6 +451,21 @@ class TestArtistEndpoints:
         assert count.call_args.kwargs["artists"] == ["Radiohead"]
         assert count.call_args.kwargs["exclude_artists"] == ["Oasis"]
 
+    @pytest.mark.parametrize("model,reasoning", [
+        ("gemini-3.8-flash", 650), ("gemini-3.5-flash-lite", 0), ("claude-sonnet-5-5", 0),
+    ])
+    def test_preview_adds_hidden_reasoning(self, client, model, reasoning):
+        config = create_mock_config()
+        config.llm.model_analysis = model
+        with patch("backend.main.get_config", return_value=config), \
+             patch("backend.main.library_cache.has_cached_tracks", return_value=True), \
+             patch("backend.main.library_cache.count_tracks_by_filters", return_value=100):
+            data = client.post("/api/filter/preview", json={"genres": [], "decades": []}).json()
+
+        # Three analysis-model calls per playlist, each with the model's typical reasoning
+        assert data["analysis_input_tokens"] == 1100
+        assert data["analysis_output_tokens"] == 300 + 3 * reasoning
+
 
 class TestLibraryFreshness:
     """The library cache keeps itself fresh: full sync when empty/interrupted/stale, incremental otherwise."""

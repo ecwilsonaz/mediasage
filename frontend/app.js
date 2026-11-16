@@ -163,6 +163,7 @@ const state = {
         recommendations: [],
         tokenCount: 0,
         estimatedCost: 0,
+        setupUsage: {},        // Tokens and cost of the question and filter calls, added to the shown cost
         researchWarning: null,
         resultId: null,
         maxAlbumsToAI: 2500,
@@ -1524,6 +1525,8 @@ async function updateFilterPreview() {
         // Cache the matching_tracks for local recalculation
         state.lastFilterPreview = {
             matching_tracks: data.matching_tracks,
+            analysis_input_tokens: data.analysis_input_tokens,
+            analysis_output_tokens: data.analysis_output_tokens,
         };
 
         // Update display
@@ -1603,9 +1606,10 @@ function recalculateCostDisplay() {
         tracks_to_send = Math.min(matching_tracks, state.maxTracksToAI);
     }
 
-    // Cost formula (matches backend: separate rates for analysis + generation models)
-    const analysis_input = 1100;
-    const analysis_output = 300;
+    // Cost formula (matches backend: separate rates for analysis + generation models).
+    // The analysis model's tokens come from the backend, which adds its hidden reasoning.
+    const analysis_input = state.lastFilterPreview.analysis_input_tokens ?? 1100;
+    const analysis_output = state.lastFilterPreview.analysis_output_tokens ?? 300;
     const gen_input = tracks_to_send * 40;
     const gen_output = state.trackCount * 60;
 
@@ -3129,6 +3133,9 @@ async function handleAnalyzePrompt() {
             method: 'POST',
             body: JSON.stringify({ prompt }),
         });
+        // The questions take two AI calls; count them toward the playlist's cost
+        state.sessionTokens += data.token_count || 0;
+        state.sessionCost += data.estimated_cost || 0;
 
         state.questions = data.questions;
         state.questionAnswers = data.questions.map(() => null);
@@ -5012,6 +5019,7 @@ async function handlePromptSubmit() {
             method: 'POST',
             body: JSON.stringify({ prompt: state.rec.prompt }),
         });
+        state.rec.setupUsage = { questions: { tokens: data.token_count || 0, cost: data.estimated_cost || 0 } };
 
         state.rec.questions = data.questions;
         state.rec.sessionId = data.session_id;
@@ -5035,6 +5043,7 @@ async function handleRefineNext() {
     const filterData = await state.rec.filterAnalysisPromise;
     await loadGenreGroups();
     if (filterData) {
+        state.rec.setupUsage.filters = { tokens: filterData.token_count || 0, cost: filterData.estimated_cost || 0 };
         state.rec.selectedGenres = filterData.genres || [];
         state.rec.includeUntagged = false;
         state.rec.selectedDecades = filterData.decades || [];
@@ -5269,8 +5278,9 @@ async function handleRecGenerate() {
                     }
                     if (data.recommendations) {
                         state.rec.recommendations = data.recommendations;
-                        state.rec.tokenCount = data.token_count || 0;
-                        state.rec.estimatedCost = data.estimated_cost || 0;
+                        const setup = Object.values(state.rec.setupUsage);
+                        state.rec.tokenCount = (data.token_count || 0) + setup.reduce((sum, u) => sum + u.tokens, 0);
+                        state.rec.estimatedCost = (data.estimated_cost || 0) + setup.reduce((sum, u) => sum + u.cost, 0);
                         state.rec.researchWarning = data.research_warning;
                         if (data.result_id) {
                             state.rec.resultId = data.result_id;
@@ -5567,6 +5577,7 @@ function resetRecState() {
     state.rec.recommendations = [];
     state.rec.tokenCount = 0;
     state.rec.estimatedCost = 0;
+    state.rec.setupUsage = {};
     state.rec.researchWarning = null;
     state.rec.resultId = null;
     state.rec.filterAnalysisPromise = null;
