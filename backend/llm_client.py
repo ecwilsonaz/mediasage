@@ -207,8 +207,8 @@ class LLMClient:
             # Extract content
             usage = response.usage_metadata
             content = response.text if response.text else ""
-            # Reasoning ("thinking") tokens are billed as output but reported separately. Attempts retried
-            # below are billed too, so everything is added up.
+            # Reasoning ("thinking") tokens are billed as output but reported separately, and retried
+            # attempts are billed too, so all of it is added up
             reasoning = (usage.thoughts_token_count or 0) if usage else 0
             input_tokens += (usage.prompt_token_count or 0) if usage else 0
             output_tokens += ((usage.candidates_token_count or 0) if usage else 0) + reasoning

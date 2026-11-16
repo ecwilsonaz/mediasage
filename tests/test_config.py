@@ -715,6 +715,43 @@ class TestCustomModel:
         assert "model_analysis" not in env_overrides("gemini")
 
 
+class TestRetiredModels:
+    """A model its provider shut down is swapped for the provider's default instead of failing every call."""
+
+    def _load(self, tmp_path, monkeypatch, llm, env=None):
+        for name in ("LLM_PROVIDER", "LLM_MODEL_ANALYSIS", "LLM_MODEL_GENERATION", "GEMINI_API_KEY"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in (env or {}).items():
+            monkeypatch.setenv(name, value)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("")
+        with patch("backend.config.load_user_yaml_config", return_value={"llm": llm}):
+            return load_config(config_file).llm
+
+    def test_saved_retired_models_get_the_defaults(self, tmp_path, monkeypatch):
+        llm = self._load(tmp_path, monkeypatch, {
+            "provider": "gemini", "model_analysis": "gemini-2.5-pro", "model_generation": "gemini-2.5-flash",
+        })
+        defaults = config_module.MODEL_DEFAULTS["gemini"]
+        assert (llm.model_analysis, llm.model_generation) == (defaults["analysis"], defaults["generation"])
+
+    def test_only_the_retired_one_changes(self, tmp_path, monkeypatch):
+        llm = self._load(tmp_path, monkeypatch, {
+            "provider": "gemini", "model_analysis": "gemini-3.8-flash", "model_generation": "gemini-2.5-flash",
+        })
+        assert llm.model_analysis == "gemini-3.8-flash"
+        assert llm.model_generation == config_module.MODEL_DEFAULTS["gemini"]["generation"]
+
+    def test_retired_model_from_environment(self, tmp_path, monkeypatch):
+        llm = self._load(tmp_path, monkeypatch, {"provider": "gemini"}, {"LLM_MODEL_ANALYSIS": "gemini-2.5-pro"})
+        assert llm.model_analysis == config_module.MODEL_DEFAULTS["gemini"]["analysis"]
+
+    def test_retired_models_are_not_in_the_catalog(self):
+        from backend.model_catalog import CATALOG_BY_ID
+
+        assert not config_module.RETIRED_MODELS & CATALOG_BY_ID.keys()
+
+
 class TestLibrarySyncHours:
     """Auto-refresh interval: Settings/YAML, overridden by LIBRARY_SYNC_HOURS."""
 

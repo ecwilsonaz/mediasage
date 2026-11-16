@@ -715,3 +715,20 @@ class TestSessionLifecycle:
         tokens, cost = pipeline.get_session_costs(sid)
         assert tokens == 0
         assert cost == 0.0
+
+
+class TestPromptFilterCost:
+    def test_filter_analysis_reports_its_cost(self):
+        from backend.llm_client import LLMResponse
+        from backend.recommender import RecommendationPipeline
+
+        response = LLMResponse(content="{}", input_tokens=800, output_tokens=200, model="gemini-3.5-flash-lite")
+        llm = MagicMock()
+        llm.generate.return_value = response
+        llm.parse_json_response.return_value = {"genres": ["Jazz"], "decades": [], "reasoning": "r"}
+        result = RecommendationPipeline(config=MagicMock(), llm_client=llm).analyze_prompt_filters(
+            "jazz", ["Jazz", "Rock"], ["1990s"]
+        )
+        assert result["genres"] == ["Jazz"]
+        assert result["token_count"] == 1000
+        assert result["estimated_cost"] == pytest.approx(response.estimated_cost())

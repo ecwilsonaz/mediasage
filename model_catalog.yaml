@@ -2,6 +2,7 @@
 #
 # Costs are USD per million tokens. Prices updated Oct 2026.
 # Mark superseded models `legacy: true` rather than removing them, so saved configs keep working.
+# Remove a model only once the provider shuts it down, and add it to RETIRED_MODELS (backend/config.py).
 # Provider defaults live in MODEL_DEFAULTS (backend/config.py).
 #
 # Optional fields:
@@ -108,15 +109,3 @@ gemini:
     context: 1_000_000
     input_cost: 0.25
     output_cost: 1.50
-  gemini-2.5-flash:
-    label: Gemini 2.5 Flash
-    context: 1_000_000
-    input_cost: 0.30
-    output_cost: 2.50
-    legacy: true
-  gemini-2.5-pro:
-    label: Gemini 2.5 Pro
-    context: 1_000_000
-    input_cost: 1.25
-    output_cost: 5.00
-    legacy: true

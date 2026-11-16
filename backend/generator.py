@@ -45,6 +45,7 @@ def generate_narrative(
     track_selections: list[dict],
     llm_client,
     user_request: str = "",
+    calls: list | None = None,
 ) -> tuple[str, str]:
     """Generate a creative title and narrative for the playlist.
 
@@ -52,6 +53,7 @@ def generate_narrative(
         track_selections: List of track dicts with artist, title, album, reason
         llm_client: LLM client instance
         user_request: Original user prompt/request for context
+        calls: If given, each LLM response is appended to it, so the caller can count the cost
 
     Returns:
         Tuple of (playlist_title with date, narrative). If the AI call keeps failing,
@@ -75,6 +77,8 @@ def generate_narrative(
         try:
             # Use analysis model for better creative writing quality
             response = llm_client.analyze(narrative_prompt, NARRATIVE_SYSTEM)
+            if calls is not None:
+                calls.append(response)
             result = llm_client.parse_json_response(response)
 
             # Handle array-wrapped responses (some LLMs wrap in [])
@@ -354,7 +358,8 @@ def generate_playlist_stream(
         yield emit("progress", {"step": "narrative", "message": "Writing playlist narrative..."})
 
         user_request = prompt or (f"Inspired by {seed_track.title}" if seed_track else "")
-        playlist_title, narrative = generate_narrative(track_selections, llm_client, user_request)
+        narrative_calls: list = []
+        playlist_title, narrative = generate_narrative(track_selections, llm_client, user_request, narrative_calls)
         logger.info("Generated narrative: title='%s', narrative_len=%d", playlist_title, len(narrative))
 
         # Emit narrative event for frontend
@@ -370,15 +375,17 @@ def generate_playlist_stream(
         logger.info("Emitting 'Playlist ready!' progress event")
         yield emit("progress", {"step": "complete", "message": "Playlist ready!"})
 
-        logger.info("Building GenerateResponse: tokens=%s, cost=%s",
-                    getattr(response, 'total_tokens', 'N/A'),
-                    response.estimated_cost() if response else 'N/A')
+        # Track selection plus the narrative call(s)
+        calls = [response, *narrative_calls]
+        token_count = sum(call.total_tokens for call in calls)
+        estimated_cost = sum(call.estimated_cost() for call in calls)
+        logger.info("Building GenerateResponse: tokens=%s, cost=%s", token_count, estimated_cost)
 
         try:
             result = GenerateResponse(
                 tracks=matched_tracks,
-                token_count=response.total_tokens,
-                estimated_cost=response.estimated_cost(),
+                token_count=token_count,
+                estimated_cost=estimated_cost,
                 playlist_title=playlist_title,
                 narrative=narrative,
                 track_reasons=track_reasons,

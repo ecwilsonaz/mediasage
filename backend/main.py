@@ -1014,17 +1014,15 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     else:
         tracks_to_send = min(matching_tracks, request.max_tracks_to_ai)
 
-    # Estimate tokens for all 3 API calls based on real-world testing (Feb 2026):
-    # - Analysis call (model_analysis): ~700 input, ~100 output
-    # - Generation call (model_generation): ~(tracks * 40) input, ~(track_count * 60) output
-    # - Narrative call (model_analysis): ~400 input, ~200 output
-    # Plus hidden reasoning on models that reason at length (Gemini 3.x Flash), for each of the analysis model's
-    # calls: prompt analysis, the clarifying-question analysis, and the narrative.
+    # Estimated tokens per playlist, from real runs:
+    # - Analysis model: prompt analysis (~700 in, ~100 out) and narrative (~400 in, ~200 out), plus the model's
+    #   hidden reasoning (catalog reasoning_tokens) on each of its three calls, the question analysis included
+    # - Generation model: ~40 input tokens per track sent, ~60 output tokens per track picked
     entry = CATALOG_BY_ID.get(config.llm.model_analysis)
-    analysis_input = 1100  # analysis (700) + narrative (400)
-    analysis_output = 300 + 3 * (entry.reasoning_tokens if entry else 0)  # analysis (100) + narrative (200)
+    analysis_input = 1100
+    analysis_output = 300 + 3 * (entry.reasoning_tokens if entry else 0)
     generation_input = tracks_to_send * 40
-    generation_output = request.track_count * 60  # ~60 tokens per track in response
+    generation_output = request.track_count * 60
 
     estimated_input_tokens = analysis_input + generation_input
     estimated_output_tokens = analysis_output + generation_output
@@ -1390,6 +1388,8 @@ async def recommend_analyze_prompt(request: AnalyzePromptFiltersRequest) -> Anal
             genres=result["genres"],
             decades=result["decades"],
             reasoning=result["reasoning"],
+            token_count=result["token_count"],
+            estimated_cost=result["estimated_cost"],
         )
     except Exception:
         logger.exception("analyze-prompt failed, returning all filters")

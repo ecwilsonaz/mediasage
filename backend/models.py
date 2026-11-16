@@ -783,6 +783,8 @@ class AnalyzePromptFiltersResponse(BaseModel):
     genres: list[str] = []
     decades: list[str] = []
     reasoning: str = ""
+    token_count: int = 0
+    estimated_cost: float = 0.0
 
 
 class RecommendQuestionsRequest(BaseModel):

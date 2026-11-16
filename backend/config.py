@@ -1,5 +1,6 @@
 """Configuration loading with environment variable priority."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from dotenv import load_dotenv
 from backend.jellyfin_client import get_jellyfin_client
 from backend.models import AppConfig, DefaultsConfig, JellyfinConfig, LLMConfig, PlexConfig
 from backend.plex_client import get_plex_client
+
+logger = logging.getLogger(__name__)
 
 # Load .env file (if it exists) - env vars take priority
 load_dotenv()
@@ -41,6 +44,9 @@ def remove_empty_values(d: dict[str, Any]) -> dict[str, Any]:
             result[k] = v
     return result
 
+
+# Models their provider has shut down: every call would fail, so a saved one is swapped for the default
+RETIRED_MODELS = {"gemini-2.5-flash", "gemini-2.5-pro"}
 
 # Default model mappings per provider
 MODEL_DEFAULTS = {
@@ -300,6 +306,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             llm_yaml.get("model_generation"),
             provider_defaults["generation"],
         )
+
+    if model_analysis in RETIRED_MODELS:
+        logger.warning("%s has been shut down; using %s instead", model_analysis, provider_defaults["analysis"])
+        model_analysis = provider_defaults["analysis"]
+    if model_generation in RETIRED_MODELS:
+        logger.warning("%s has been shut down; using %s instead", model_generation, provider_defaults["generation"])
+        model_generation = provider_defaults["generation"]
 
     # CUSTOM_LLM_MODEL sets both models for a custom endpoint; LLM_MODEL_* still win
     custom_model = os.environ.get("CUSTOM_LLM_MODEL")
